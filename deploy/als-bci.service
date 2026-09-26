@@ -12,6 +12,7 @@ EnvironmentFile=/etc/als-bci.env
 Environment=PYTHONUNBUFFERED=1
 Environment=OPENBLAS_NUM_THREADS=1
 Environment=OMP_NUM_THREADS=1
+Environment=MPLCONFIGDIR=/var/lib/als-bci/cache/matplotlib
 ExecStart=/opt/als-bci/venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000 --workers 1 --proxy-headers --forwarded-allow-ips 127.0.0.1
 Restart=always
 RestartSec=3

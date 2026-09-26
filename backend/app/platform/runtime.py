@@ -49,7 +49,7 @@ class Replay:
     eog_starts: list = field(default_factory=list)
     eog_sequence: bool = False
     eog_prefiltered: bool = False
-    eog_protocol: str = ""
+    eog_protocol: str = "未配对真实EOG输入；仅显示EEG推理，不产生移动确认。"
     generation: int = 0
     lock: object = field(default_factory=asyncio.Lock)
 

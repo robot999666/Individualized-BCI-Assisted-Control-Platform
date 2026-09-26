@@ -3,6 +3,7 @@
 set -euo pipefail
 id als-bci >/dev/null 2>&1 || useradd --system --home /var/lib/als-bci --create-home --shell /usr/sbin/nologin als-bci
 install -d -m 750 -o als-bci -g als-bci /var/lib/als-bci/artifacts /var/lib/als-bci/demo
+install -d -m 750 -o als-bci -g als-bci /var/lib/als-bci/cache/matplotlib
 python3 -m venv /opt/als-bci/venv
 /opt/als-bci/venv/bin/pip install -r /opt/als-bci/current/backend/requirements.txt
 python3 -m venv /opt/als-bci/eog-venv
