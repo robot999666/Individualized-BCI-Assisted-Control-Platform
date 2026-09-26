@@ -5,7 +5,7 @@ import numpy as np
 from app.services.bci_model_service import Bci4ClassService
 
 
-ASSET_DIR = Path(__file__).resolve().parents[2] / "bci_4class"
+ASSET_DIR = Path(__file__).resolve().parents[2] / "algorithms" / "bci_4class"
 
 
 def test_models_load_and_are_ready() -> None:

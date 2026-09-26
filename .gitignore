@@ -29,3 +29,18 @@ Thumbs.db
 # 浏览器验证产物
 .playwright-cli/
 output/
+
+# Private runtime and raw research data
+*.pem
+*.key
+runtime/
+sample_data/BCICIV_2a_gdf/
+sample_data/desc_2a*.pdf
+sample_data/demo_processed/
+*.sqlite*
+.env.*
+!.env.example
+
+temp/
+algorithms/eog_blink/eog_dataset.npz
+algorithms/eog_blink/*.png

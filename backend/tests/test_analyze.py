@@ -10,7 +10,7 @@ from app.api.deps import bci_service
 from app.main import app
 
 client = TestClient(app)
-ASSET_DIR = Path(__file__).resolve().parents[2] / "bci_4class"
+ASSET_DIR = Path(__file__).resolve().parents[2] / "algorithms" / "bci_4class"
 
 
 def _fixture(channels: int = 3, trials: int = 8) -> tuple[np.ndarray, np.ndarray]:

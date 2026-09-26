@@ -1,6 +1,7 @@
 """全局配置：所有可调参数集中管理，可通过环境变量、backend/.env 或根目录 .env 覆盖。"""
 
 from functools import lru_cache
+import os
 from pathlib import Path
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -18,6 +19,14 @@ class Settings(BaseSettings):
 
     app_name: str = "ALS-BCI V0 Demo"
     app_version: str = "0.1.0"
+    database_url: str = "sqlite:///../runtime/development.sqlite"
+    artifact_dir: Path = _REPO_DIR / "runtime" / "artifacts"
+    demo_data_dir: Path = _REPO_DIR / "sample_data" / "demo_processed"
+    production: bool = False
+    session_hours: int = 8
+    secure_cookie: bool = False
+    demo_password: str | None = None
+    eog_python: Path = _REPO_DIR / "runtime" / "eog-env" / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
     api_prefix: str = "/api/v1"
 
     cors_origins: list[str] = ["http://localhost:3000", "http://127.0.0.1:3000"]

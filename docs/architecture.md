@@ -1,71 +1,13 @@
-# BCI 四分类 Web 接入架构
+# 平台架构
 
-## 数据流
+Next.js静态前端 → 同源Nginx /api → FastAPI单worker → MySQL与文件artifact。
+用户会话令牌为数据库保存SHA256的随机token，不需要JWT secret。密码Argon2id。roles/user_roles实现四角色限制；subjects为研究参与者，owner_id是登录账号。
 
-```text
-NPZ 批量文件
-  → 上传大小与 ZIP 结构检查
-  → np.load(allow_pickle=False)
-  → dtype / finite / 250Hz / μV / (N, 3|22, 501) 校验
-  → 使用整批 trial 计算 EA 参考协方差
-  → 四频带滤波与 CSP 特征
-  → LDA 四分类概率
-  → REST 响应与网页 trial 时间线
-```
+校准：安全NPZ → mean(X X^T) → 正则 → R^-1/2 → 账号隔离artifact → MySQL Profile元数据。
+回放：固定Profile → 后端250Hz时钟分块释放真实EEG →501点完整窗口→EA→四频带滤波→CSP→LDA→四类概率→安全决策。
+EOGProvider使用真实SVM模型实现，版本隔离子进程加载并校验权重；DeviceAdapter目前只有Simulator实现，后续可接MQTT/HTTP/WebSocket/Serial。预测不会绕过统一安全控制层直达设备。
 
-模型在进程启动时只加载一次。权重来自镜像内 `bci_4class/models`，加载前验证固定
-SHA-256；上传内容绝不会作为 pickle 或 Python 对象反序列化。推理通过线程池执行并用
-信号量限制并发，避免 CPU 任务阻塞 FastAPI 事件循环。
+实际表：users, roles, user_roles, login_sessions, subjects, calibration_profiles, experiments, inference_sessions, inference_records, devices, device_commands, alerts, audit_logs, system_configuration。通过Alembic建表；大型模型和EA不进入数据库。
+回放内存态不跨进程共享；重启关闭旧会话、全部STOP；重新选择持久Profile创建会话即可重载。当前HTTP polling没有WebSocket端点。
 
-## API 契约
-
-`POST /api/v1/analyze` 接收 multipart：
-
-- `file`: NPZ，包含 `X` 和可选 `y`；
-- `sampling_rate_hz=250`；
-- `unit=uV`。
-
-响应核心结构：
-
-```json
-{
-  "model_name": "EA+FBCSP",
-  "model_mode": "cold_start",
-  "channel_layout": "3ch",
-  "trial_count": 8,
-  "window_samples": 501,
-  "batch_coupled_alignment": true,
-  "predictions": [
-    {
-      "trial_index": 0,
-      "class_id": 0,
-      "label": "left",
-      "label_zh": "左转",
-      "confidence": 0.71,
-      "probabilities": {
-        "left": 0.71,
-        "right": 0.09,
-        "forward": 0.12,
-        "stop": 0.08
-      },
-      "is_mock": false
-    }
-  ]
-}
-```
-
-提供 `y` 时，每项增加预期类别与是否正确，并返回整批 `validation.accuracy`。
-
-## 运行与安全边界
-
-- 压缩上传最大 20 MB，ZIP 声明的解压总量及 `X.nbytes` 最大 64 MB；
-- 只接受 `X`/`y` 两个数组，不接受路径成员、加密 ZIP、对象数组、NaN/Inf；
-- 单批至少 2 个 trial，固定 501 点、250Hz、μV；
-- 日志只记录 trial 数、通道布局、推理耗时和错误类型，不记录原始脑电；
-- Docker 使用非 root 用户、单 Uvicorn worker和 CPU-only 依赖。
-
-## 后续实时化
-
-实时设备接入应新增独立 WebSocket 会话层：连续 EEG 缓冲 → 501 点窗口 → 用户级 EA
-参考 → 推理 → 多帧平滑 → 指令推送。EA 参考需要由足量、同一用户的历史窗口建立并固定，
-不得对每个单独窗口重新计算。用户身份、参考生命周期、断线恢复和并发隔离应在该阶段一并设计。
+旧批量REST接口仍保留软件回归用途，生产仅研究员/管理员访问，不具有设备控制权。旧RAG界面已停用；第三方密钥不参与主流程。

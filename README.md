@@ -1,141 +1,115 @@
-# ALS-BCI 四分类 Web 实验平台
+# 个体化脑机辅助控制软件平台
 
-面向 ALS 重度运动障碍人群的脑电运动想象科研原型。系统使用 **EA（欧氏对齐）+
-FBCSP + LDA** 冷启动模型，将 2 秒 EEG trial 识别为四类指令：
+面向 ALS 中晚期、重度脑卒中后遗症等重度运动障碍人群的辅助交互研究与比赛软件。
+**不是医疗器械，不提供诊断、治疗或真实 ALS 临床有效性宣称。**
 
-| class_id | 英文标签 | 中文指令 | 运动想象 |
-| --- | --- | --- | --- |
-| 0 | `left` | 左转 | 左手 |
-| 1 | `right` | 右转 | 右手 |
-| 2 | `forward` | 直行 | 双脚 |
-| 3 | `stop` | 停止 | 舌头 |
+## 实现与边界
 
-> 本项目是科研原型，不构成医疗器械宣称，不用于诊断或治疗。内置 S3 数据参与过
-> 冷启动模型训练，其准确率只能用于软件回归，不能代表对新用户的泛化能力。
+用户 → 独立校准集 → Calibration Profile → 真实 EEG 流式回放 → EA + FBCSP + LDA → Safety Controller → EOG 确认 → Device Gateway → 模拟器 → 告警、监控与审计。
 
-## 当前能力
+- **REAL**：两套原有真实模型（3ch / 22ch）、SHA256校验、EA校准、窗口推理、MySQL元数据、Argon2密码、服务端Session、四角色RBAC、安全逻辑、API/进程指标与审计。
+- **REAL MODEL**：已接入交付的 EOG SVM 眨眼模型，以真实 EOG 窗口检测、自动双眨眼确认；没有手动 Mock 确认接口。EEG 与 EOG 分别运行在 sklearn 1.6.1 / 1.9.1 环境，加载时校验 SHA256。
+- **SIMULATED**：轮椅、护理床、紧急呼叫、智能家居；ACK、延迟、丢包、离线、超时、失败及BUSY。设备延迟和执行状态不是实体设备测量。
+- **未实现**：真实EEG/EOG采集、硬件Adapter、ALS临床评估。HTTP IP站点不是医疗级安全系统，限公开科研Demo，真实敏感数据需先完成HTTPS和独立安全评估。
 
-- FastAPI REST 批量推理，支持 3 通道 `[C3, Cz, C4]` 和 BCI 2a 标准 22 通道；
-- 启动时加载并校验两套模型 SHA-256，模型失败时健康检查显示 `degraded`，不回退 Mock；
-- 安全读取 NPZ（`allow_pickle=False`、压缩/解压大小限制、形状与有限值校验）；
-- Next.js 实验页面提供 S3 科研数据回放、NPZ 上传、波形预览和 trial 预测时间线；
-- CPU-only Docker 部署，不需要 GPU。
-- “BCI 智答 · 项目助手”使用本地项目资料做中文 TF-IDF 检索，再由后端调用
-  OpenAI Compatible 模型生成带来源的回答。
+首页 `/`，工作台 `/lab/`，运行中心 `/operations/`。生理数据尽可能本地/端侧处理是设计目标；本部署上传数据在服务器执行计算。代码不把原始EEG发送第三方模型。
 
-## Docker 启动
+## 冷启动的真实含义
 
-确保 Docker Desktop/Engine 可用，然后在仓库根目录运行：
+旧实现每次使用整个请求批次重新计算EA。本版本先执行 integration 的全局 4–36Hz 带通，再使用校准集计算 `mean(X @ X.T)`，加 `1e-6 * trace(R)/channels` 正则，保存其逆平方根矩阵为NPZ。无标签校准保持原预训练 CSP/LDA；上传含真实 y、每类至少10条的校准集时，调用交付算法重新训练 CSP/LDA，并保存真实个人分类器。两种产物在 Profile 中分别标记。修正了交付代码校准与预测的全局滤波不一致问题。
+
+Profile保存user_id（研究参与者）、owner_id（账号）、model_version/checksum、channel_layout、calibration_sample_count、artifact_path/checksum、来源trial指纹、created_at、status。无独立验证时validation_metric为null。
+后续推理读取同一Profile，逐窗口结果不随evaluation批次组成变化。模型版本或artifact checksum变化拒绝执行。撤销Profile停止关联会话。相同trial同时出现在校准与evaluation时拒绝创建会话。
+
+原模型4个频带：4–12 /8–16 /12–24 /20–36 Hz，Butterworth + `filtfilt` + CSP + LDA。3通道为C3/Cz/C4（原22ch索引7/9/11），每频带3个特征；22ch每频带6个特征。输入250Hz、μV、501点。窗口内filtfilt非逐采样因果，窗口收齐才推理。
+
+## 数据与指标口径
+
+见 [改造前审计](docs/prechange-audit.md)、[数据协议](docs/data-protocol.md)。BCI Competition IV 2a有9名受试者，各T/E两会话，6 run×48 trial=288，22 EEG+3 EOG；EOG不参与分类。
+
+Demo：A01T前40个干净trial仅用于EA校准，A01E前24个干净trial用于回放。逐trial保留原始索引、cue/sample位置、GDF与NPZ SHA256。E没有类别标签时不计算accuracy。预训练交付包声称使用全部9人，缺少完整session/trial训练清单，因此**T/E分离不等于独立模型验证**，也不能声称未见受试者表现。
+
+原始GDF、说明PDF和转换后demo均不进入Git；在本机转换后，仅将最小demo通过SSH部署。来源许可没有在仓库中完整提供，不作再许可或公开数据集再分发。
+
+真实S3软件回归（2026-09-26 Windows Python3.12.7）：3ch 288条=63.5417%，22ch 288条=82.9861%，重复预测逐值一致；批量模型计算约55.9ms/371.7ms，非实时硬件性能、非独立泛化指标。S3参与过训练。71.3%、53.6%缺少可复核实验记录；60.4%未查到出处，均不用于正式页面宣传。
+
+## 本地启动（Windows，Python3.12 / Node22+ / MySQL8）
 
 ```powershell
-docker compose up --build
+python -m venv backend/.venv
+backend/.venv/Scripts/python -m pip install -r backend/requirements-dev.txt
+# 本地MySQL绑定127.0.0.1，创建als_bci数据库及专用账号
+# 按.env.example建立未提交的.env，填写DATABASE_URL；凭据至少12字符
+cd backend
+.venv/Scripts/python -m alembic upgrade head
+# 将四个BCI_<ROLE>_PASSWORD作为环境变量设置（不要写入命令历史）
+.venv/Scripts/python -m app.platform.seed
+.venv/Scripts/python -m uvicorn app.main:app --host 127.0.0.1 --port 8000 --workers 1
 ```
 
-后端地址：`http://localhost:8000`，Swagger：`http://localhost:8000/docs`。
-
-前端仍可在本机启动：
+GDF转换使用单独环境，避免MNE1.9/NumPy2读取GDF时的uint8溢出；推理仍保持NumPy2.2.6/SciPy1.15.3/sklearn1.6.1/MNE1.9.0：
 
 ```powershell
+python -m venv runtime/gdf-env
+runtime/gdf-env/Scripts/python -m pip install -r scripts/requirements-gdf.txt
+runtime/gdf-env/Scripts/python scripts/prepare_demo.py
+python -m venv runtime/eog-env
+runtime/eog-env/Scripts/python -m pip install -r backend/requirements-eog.txt
+backend/.venv/Scripts/python scripts/prepare_eog_demo.py
 cd frontend
-npm install
-npm run dev
-```
-
-## 本地启动
-
-```powershell
-cd backend
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-python -m pip install -r requirements-dev.txt
-uvicorn app.main:app --reload --port 8000
-```
-
-依赖固定为 Python 3.12、NumPy 2.2.6、SciPy 1.15.3、scikit-learn 1.6.1、
-MNE 1.9.0 等已验证组合。模型 pickle 记录的 scikit-learn 版本为 1.6.1。
-
-## REST API
-
-| 方法 | 路径 | 说明 |
-| --- | --- | --- |
-| `GET` | `/api/v1/health` | 模型就绪、布局、checksum 与运行库版本 |
-| `GET` | `/api/v1/demo/signals?trial_count=8` | S3 三通道科研样例回放与真实模型预测 |
-| `POST` | `/api/v1/analyze` | 上传 NPZ，完成整批 EA + FBCSP 推理 |
-| `GET` | `/api/v1/assistant/health` | RAG 索引与模型服务配置状态（不返回密钥） |
-| `POST` | `/api/v1/assistant/chat` | 项目知识问答，返回回答和资料标题/章节 |
-
-上传使用 multipart：
-
-- `file`：`.npz`，必须含 `X`，可选 `y`；
-- `sampling_rate_hz`：固定 `250`；
-- `unit`：固定 `uV`。
-
-```powershell
-curl.exe -X POST http://localhost:8000/api/v1/analyze `
-  -F "file=@bci_4class/data/S3_3ch.npz" `
-  -F "sampling_rate_hz=250" `
-  -F "unit=uV"
-```
-
-`X` 必须是数值数组 `(N, 3|22, 501)`，且 `N >= 2`；`y` 如存在则为 `(N,)`
-整数数组，取值 `0..3`。输入单位必须是 μV。响应包含每个 trial 的类别、置信度、
-四类概率，以及提供 `y` 时的软件验证准确率。
-
-## 已验证结果
-
-在 Windows/Python 3.12 固定依赖环境中：
-
-| 布局 | 样本数 | S3 回归准确率 | 批量推理耗时 |
-| --- | ---: | ---: | ---: |
-| 3 通道 | 288 | 63.54% | 约 56 ms |
-| 22 通道 | 288 | 82.99% | 约 381 ms |
-
-两次重复推理逐值一致，概率均为有限值且每行之和为 1。后端测试、前端 lint、
-TypeScript 检查与生产构建命令如下：
-
-```powershell
-cd backend
-.\.venv\Scripts\python.exe -m pytest -q
-
-cd ..\frontend
+npm ci
 npm run lint
 npx tsc --noEmit
 npm run build
+cd ..
+backend/.venv/Scripts/python scripts/preview.py
+# http://localhost:3000，静态生产构建，同源/api代理到8000
 ```
 
-## 重要边界
+开发热更新可在frontend运行npm run dev；跨端口开发显式配置 `NEXT_PUBLIC_API_BASE_URL=http://localhost:8000`，生产留空走同源 `/api`。`scripts/preview.py`仅本地使用。
 
-- 冷启动 EA 的参考协方差由一次请求中的全部 trial 共同计算，所以同一个 trial 的结果
-  可能随批次组成变化；首版明确不支持单 trial 无状态推理。
-- 当前没有用户校准模型、数据库、实时 WebSocket 或设备通信。
-- 实时接入需要为每个用户维护稳定的 EA 参考、滑动窗口、预测平滑与会话隔离，不能简单
-  地逐窗调用当前 REST 接口。
+## 可重复Demo
 
-详细数据流和部署边界见 [docs/architecture.md](docs/architecture.md)。
+1. 登录 `demo_guest`（管理员提供密码），创建/选择Demo User。
+2. 开始个体化校准，确认40条、3ch、EA reference与模型checksum。
+3. 创建Demo实验，选择Profile和Evaluation Set，1×创建会话。
+4. 开始回放，250Hz释放样本，观察真实波形/概率/各阶段耗时。
+5. 第3个窗口通常出现连续2窗右转且置信度>55%，随后第7/8秒真实EOG片段经模型识别为两次眨眼，自动确认并产生RIGHT和SIMULATED ACK。窗口切换可立即恢复STOP；持久命令记录保留ACK证据。
+6. 暂停/继续/重置；把轮椅设OFFLINE，下一窗口STOP/REJECTED，告警和审计出现记录。
+7. 测试DELAY、DROP、TIMEOUT、FAILURE。紧急求助最高优先并锁定STOP，重置后才能重新播放。
+8. 运行中心查看记录；caregiver可查看和处理脱敏Demo告警，不能上传、校准或修改配置。
 
-## 项目知识助手
+四账号：demo_admin / demo_researcher / demo_caregiver / demo_guest，密码仅在私有交付文件中。管理员可以创建账号、改权限/停用账号、查看模型checksum、配置新会话安全阈值（0.5–0.99）和稳定窗数（2–5）。研究人员仅访问自己的参与者、Profile、实验及日志；可上传带真实标签的evaluation做真实预测评分，页面明确训练重叠未知。访客只允许内置公开Demo。当前照护权限限脱敏Demo，真实用户照护授权关系待后续扩展。
 
-助手索引根目录 `README.md`、`frontend/README.md`、`bci_4class/README.md` 和
-`docs/**/*.md`。项目资料会在后端进程启动时切块并建立中文字符 n-gram TF-IDF 索引，
-请求时只把 Top-K 相关片段发送给模型；索引在进程内缓存，不会每次请求重新扫描。
+## 安全与运维
 
-复制 `.env.example` 为未提交的 `.env`，并配置：
-
-```dotenv
-OPENAI_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
-OPENAI_API_KEY=在这里填写真实密钥
-OPENAI_MODEL=deepseek-v4-flash-0731
-```
-
-密钥只由 FastAPI 后端读取，不要写入 `frontend/`、`NEXT_PUBLIC_*` 或浏览器代码。
-没有配置密钥时，主应用仍能正常启动，`GET /api/v1/assistant/health` 会显示
-`provider_configured: false`，聊天接口返回友好的 503 提示。
+- 密码Argon2id；随机不透明Session令牌只以SHA256保存到数据库；HttpOnly + SameSite=Strict cookie，8小时有效，停用/权限变更撤销会话。
+- 写请求校验Origin；生产要求X-BCI-Request头；登录/API速率限制；生产关闭/docs、/redoc、/openapi.json。接HTTPS后开启SECURE_COOKIE。
+- 上传限制20MiB，NPZ解压64MiB；类型、shape、有限值、标签、路径检查，禁止用户pickle；artifact以随机ID按账号目录隔离。
+- 安全默认STOP：低置信度、预测不稳定、无确认、离线/BUSY/ERROR、过期、异常；单次确认绑定窗口且不能重放；运动许可3秒到期STOP；客户端6秒无轮询自动暂停，重启不自动恢复运动。
+- 单worker拥有回放时钟和模拟器；当前不支持横向多worker共享实时会话。关闭会话释放内存；持久记录保留。日志仅元数据，不记录EEG/密码/令牌。
+- API和推理计时用perf_counter；回放用monotonic；模拟设备延迟由计划事件实现，标记SIMULATED，未用sleep伪造推理耗时。计算延迟不含采样等待、网络传输或数据库最终commit。
 
 ```powershell
-curl.exe -X POST http://localhost:8000/api/v1/assistant/chat `
-  -H "Content-Type: application/json" `
-  -d '{"question":"四分类意图是什么？"}'
+backend/.venv/Scripts/python -m pytest backend/tests -q
+backend/.venv/Scripts/python scripts/benchmark_bci.py
 ```
 
-后续人工补充的项目介绍、算法解释、实验结果、网站说明和 FAQ 可放入
-`docs/rag/`，重启后端即可重建索引。
+生产使用本地已验证静态构建 + Nginx + systemd + MySQL；不依赖SSH终端，不需要生产Node进程。见 [部署与故障排查](docs/operations.md)。`deploy/install.sh`只安装已上传的已验证release，`.env`位于/etc、模型在代码目录、数据在/var/lib，避免代码更新覆盖用户产物。
+
+## 核心API
+
+`/api/v1/health`；`/auth/login|me|logout`；`/users`；`/subjects`；`/subjects/{id}/calibrate-demo|calibrate-upload`；`/profiles`；`/subjects/{id}/experiments/demo|upload`；`/experiments/{id}/evaluate`；`/sessions`；`/sessions/{id}/tick|control|emergency-stop`；`/experiments/{id}/eog-upload`；`/eog/demo-analyze|analyze-upload`；`/sessions/{id}/devices/{device_id}`；`/operations`；`/alerts/{id}/ack`；`/configuration`。
+
+流式传输采用每100ms HTTP轮询，服务器依据原采样时钟释放样本，不是动画伪装推理。目前没有WebSocket路径；Nginx保留Upgrade配置供未来扩展。旧批量analyze/demo和RAG接口仅管理员/研究人员在生产可访问，不控制设备。RAG为可选旧功能，当前不在控制UI启用，未配置第三方密钥也可完整演示。
+
+## 目录与真实 EOG 数据
+
+`algorithms/bci_4class`：原 EEG 算法、权重、S3 回归样本；`algorithms/system_integration`：交付的 EEG/EOG 集成算法和运行权重；`algorithms/eog_blink`：EOG 数据构建、训练、推理来源代码及本机缓存。
+`backend` / `frontend`：产品服务；`scripts`：预处理和模型工作进程；`deploy`：部署配置；`docs`：项目说明；`sample_data`：本地原始和最小演示数据；`runtime`：本地私有运行环境；`temp`：临时脚本、日志、截图、原始备份。后两者不进入 Git 或服务器发布包。
+
+用户提供的 eog_dataset.npz 含23529个250点窗口，来源代码以幅度/峰值规则自动标注，最终模型训练使用全部窗口。它不是独立人工标注评测集，不发布99.95%等无法复核的指标。缓存已过1–15Hz带通，回放不会重复过滤，也不启用依赖DC的持续偏移规则。
+
+`prepare_eog_demo.py`从该缓存选48段真实信号，显式把两个眨眼样本排在6–8秒，和2a EEG构成离线配对软件场景。**不是同一受试者同步采集，不是原始连续EOG记录，也不是独立准确率验证。** 行号、受试者编号、伪标签、来源哈希全部写入manifest。无EOG输入时不会产生移动确认；模型异常默认STOP。
+
+私有研究实验可以上传EOG NPZ（只有X）：(N,501)对应EEG各trial，或(2N,250)片段序列；250Hz、μV。上传者须如实声明是否已经带通处理，说明同步关系；平台不凭上传自动宣称同步采集。原始EOG缓存约40MB仅本机保留，不提交或完整上传。

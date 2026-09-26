@@ -21,7 +21,7 @@ def main() -> None:
     print("layout,trials,accuracy,seconds,deterministic,max_probability_sum_error")
     for channels in (3, 22):
         with np.load(
-            REPO_DIR / "bci_4class" / "data" / f"S3_{channels}ch.npz",
+            REPO_DIR / "algorithms" / "bci_4class" / "data" / f"S3_{channels}ch.npz",
             allow_pickle=False,
         ) as payload:
             x, y = payload["X"], payload["y"]

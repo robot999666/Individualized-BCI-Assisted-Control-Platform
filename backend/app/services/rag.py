@@ -44,7 +44,7 @@ class ProjectKnowledgeIndex:
         candidates = [
             self.repo_dir / "README.md",
             self.repo_dir / "frontend" / "README.md",
-            self.repo_dir / "bci_4class" / "README.md",
+            self.repo_dir / "algorithms" / "bci_4class" / "README.md",
         ]
         docs_dir = self.repo_dir / "docs"
         if docs_dir.is_dir():

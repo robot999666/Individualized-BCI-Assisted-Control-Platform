@@ -100,7 +100,7 @@ class Bci4ClassService:
     """一次加载两种通道布局的只读模型，并提供批量冷启动推理。"""
 
     def __init__(self, asset_dir: Path | None = None, self_test: bool = True) -> None:
-        self.asset_dir = asset_dir or (_repo_dir() / "bci_4class")
+        self.asset_dir = asset_dir or (_repo_dir() / "algorithms" / "bci_4class")
         self.models: dict[int, RuntimeModel] = {}
         self.error: str | None = None
         self.loaded_at_seconds: float | None = None

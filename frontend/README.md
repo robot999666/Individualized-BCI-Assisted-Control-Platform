@@ -1,19 +1,6 @@
-# frontend
+# 前端
 
-ALS-BCI V0 科研原型的前端（Next.js 16 · TypeScript · Tailwind CSS v4 · ECharts）。
-
-启动与说明见仓库根目录 [README.md](../README.md)。
-
-```powershell
-npm install
-npm run dev        # http://localhost:3000
-npm run lint
-npx tsc --noEmit
-npm run build
-```
-
-接口地址默认 `http://localhost:8000`，可通过 `frontend/.env.local` 中的
-`NEXT_PUBLIC_API_BASE_URL` 修改。
-
-全站右下角的“BCI 智答 · 项目助手”只调用上述 FastAPI 地址的
-`/api/v1/assistant/chat`，不会在前端读取或携带上游模型密钥。
+Next.js 16.3.1 / React19 / TypeScript / Tailwind4，原项目内改造，静态export部署。
+`npm ci` → `npm run lint` → `npx tsc --noEmit` → `npm run build`，输出out/。
+生产同源`/api/v1`；本地可用根目录scripts/preview.py代理。npm run dev热更新时可设置NEXT_PUBLIC_API_BASE_URL=http://localhost:8000（仅公开API地址，不允许密钥）。
+首页/、控制工作台/lab/、运行中心/operations/。EOG使用真实SVM模型并标记REAL MODEL，设备标记SIMULATED。当前工作台真实EEG回放按后端采样时钟，不调用旧useExampleAnimation。
