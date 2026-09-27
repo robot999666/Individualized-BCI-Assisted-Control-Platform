@@ -8,9 +8,7 @@ python3 -m venv /opt/als-bci/venv
 /opt/als-bci/venv/bin/pip install -r /opt/als-bci/current/backend/requirements.txt
 python3 -m venv /opt/als-bci/eog-venv
 /opt/als-bci/eog-venv/bin/pip install -r /opt/als-bci/current/backend/requirements-eog.txt
-# Native production MySQL is loopback only, including the optional X plugin.
-printf '[mysqld]\nbind-address=127.0.0.1\nmysqlx-bind-address=127.0.0.1\n' > /etc/mysql/mysql.conf.d/als-bci.cnf
-systemctl restart mysql
+# The server's existing MySQL instance is already loopback-only; leave it untouched.
 if [ ! -f /etc/als-bci.env ]; then
 python3 - <<'PY'
 import json,secrets,subprocess,os
@@ -123,7 +121,7 @@ fi
 ln -sfn /etc/nginx/sites-available/als-bci /etc/nginx/sites-enabled/als-bci
 nginx -t
 systemctl daemon-reload
-systemctl enable mysql nginx als-bci
+systemctl enable nginx als-bci
 systemctl restart als-bci nginx
 if [ -s /etc/letsencrypt/live/152.136.191.171/fullchain.pem ]; then
     certbot renew --dry-run --run-deploy-hooks
