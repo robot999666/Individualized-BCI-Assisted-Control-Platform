@@ -31,7 +31,7 @@ from pathlib import Path
 path=Path('/etc/als-bci.env')
 lines=path.read_text().splitlines()
 updates={'SECURE_COOKIE':'true','PUBLIC_FRONTEND_URL':'https://152.136.191.171:9443',
-         'CORS_ORIGINS':'["https://152.136.191.171:9443"]'}
+         'CORS_ORIGINS':"'[\"https://152.136.191.171:9443\"]'"}
 seen=set();result=[]
 for line in lines:
     key=line.split('=',1)[0] if '=' in line else ''
@@ -77,7 +77,7 @@ from pathlib import Path
 path=Path('/etc/als-bci.env')
 lines=path.read_text().splitlines()
 updates={'SECURE_COOKIE':'false','PUBLIC_FRONTEND_URL':'http://152.136.191.171',
-         'CORS_ORIGINS':'["http://152.136.191.171"]'}
+         'CORS_ORIGINS':"'[\"http://152.136.191.171\"]'"}
 result=[];seen=set()
 for line in lines:
     key=line.split('=',1)[0] if '=' in line else ''
