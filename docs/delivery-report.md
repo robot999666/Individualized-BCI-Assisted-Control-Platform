@@ -74,8 +74,7 @@ S3软件回归再次确认：3ch63.5417%、22ch82.9861%，288条，重复概率�
 ## Git与发布
 
 仓库：https://github.com/robot999666/als-bci-web，分支main。
-本次功能提交：3695446a127bca8d967cd54d6b9ac04504c61e9b（及其前序提交）。生产版本文件为 `/opt/als-bci/current/RELEASE_COMMIT`。
-最终提交由 `git rev-parse HEAD` 查询；生产版本文件为 `/opt/als-bci/current/RELEASE_COMMIT`。交付报告与最终部署缓存配置随之后续提交一起推送。
+项目说明和部署口径已同步至GitHub `main`；生产代码发布版本为`3695446a127bca8d967cd54d6b9ac04504c61e9b`，记录于 `/opt/als-bci/current/RELEASE_COMMIT`。公网安全组规则尚未添加，外网验收因此待完成。
 发布包基于Git已提交文件和本地静态构建，排除temp/runtime/.env/.pem/完整EOG缓存/原始GDF。用户产物与代码目录分离。
 
 ## 运维与排障
@@ -95,7 +94,7 @@ sudo ss -lntp
 sudo ufw status
 ```
 
-网站打不开先查Nginx、9443监听、UFW和腾讯云安全组；502查后端启动及loopback8000；FastAPI起不来查env、WorkingDirectory、迁移、Python与EOG环境；模型失败查checksum/依赖和EOG_PYTHON；MySQL失败查本地服务、账号和DATABASE_URL；校准失败查NPZ维度/250Hz/μV/非有限值/样本量/写权限；断流查WebSocket、Secure Cookie、Origin和会话状态；设备离线在模拟器切换ACK并查告警，急停需显式重置；磁盘满查df与产物保留策略；内存高查会话数量、文件大小与进程RSS。完整说明见operations.md。
+公网网站打不开先查腾讯云安全组 TCP 9443，再查Nginx监听、UFW和静态资源；502查后端启动及loopback8000；FastAPI起不来查env、WorkingDirectory、迁移、Python与EOG环境；模型失败查checksum/依赖和EOG_PYTHON；MySQL失败查本地服务、账号和DATABASE_URL；校准失败查NPZ维度/250Hz/μV/非有限值/样本量/写权限；断流查WebSocket、Secure Cookie、Origin和会话状态；设备离线在模拟器切换ACK并查告警，急停需显式重置；磁盘满查df与产物保留策略；内存高查会话数量、文件大小与进程RSS。完整说明见operations.md。
 
 ## 项目边界
 

@@ -1,6 +1,6 @@
 # 生产部署与运维
 
-访问：https://152.136.191.171:9443/；HTTP `:80` 仅用于 Let's Encrypt IP 证书验证和跳转。TLS 在应用专用 `:9443` 终止；不占用共享 `:443`。公网 HTTPS Cookie 设置 `SECURE_COOKIE=true`。证书约6天有效，由 systemd 定时器每6小时检查续期并在续期后重载 Nginx。
+入口：https://152.136.191.171:9443/。服务器和 UFW 已启用 HTTPS；公网访问还需腾讯云安全组允许入站 TCP 9443。HTTP `:80` 用于 Let's Encrypt IP 证书验证和跳转，应用 TLS 在专用 `:9443` 终止，不占用共享 `:443`。公网 HTTPS Cookie 设置 `SECURE_COOKIE=true`。证书约6天有效，由 systemd 定时器每6小时检查续期并在续期后重载 Nginx。
 
 ## 目录与环境
 
@@ -55,7 +55,7 @@ sudo ufw status
 
 | 现象 | 排查与处理 |
 |---|---|
-| 网站打不开 | 查实例/安全组80、UFW、nginx状态；curl localhost；检查静态out完整 |
+| 公网网站打不开 | 先查腾讯云安全组入站 TCP 9443，再查 UFW、Nginx监听和静态out；服务器本机可用 `curl -fsS https://152.136.191.171:9443/api/v1/health/live` 验证 |
 | Nginx 502 | 查als-bci与127.0.0.1:8000；journalctl；不要把8000开放公网 |
 | FastAPI起不来 | 查env权限/格式、Python依赖、数据库迁移与WorkingDirectory；单worker |
 | model load failed | 查两个模型SHA256、文件权限、NumPy2.2.6/SciPy1.15.3/sklearn1.6.1/MNE1.9.0；不能回退Mock |
