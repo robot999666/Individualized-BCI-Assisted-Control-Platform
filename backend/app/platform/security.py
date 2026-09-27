@@ -25,7 +25,10 @@ def digest(value):
 
 
 def current_user(request: Request):
-    token = request.cookies.get("bci_session", "")
+    return user_from_token(request.cookies.get("bci_session", ""))
+
+
+def user_from_token(token):
     with Session() as db:
         login = db.get(LoginSession, digest(token))
         if not login or login.expires < time.time():

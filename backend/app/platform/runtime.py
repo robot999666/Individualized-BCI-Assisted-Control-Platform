@@ -16,6 +16,7 @@ from app.platform.eog import RealEOGProvider, analyze_batch
 live = {}
 request_metrics = deque(maxlen=2000)
 inference_metrics = deque(maxlen=1000)
+inference_semaphore = asyncio.Semaphore(1)
 request_count = 0
 error_count = 0
 
@@ -171,7 +172,10 @@ async def tick(db, replay):
         index = end // 501 - 1
         started = time.perf_counter()
         try:
-            proba, latency = predict(replay.x[index:index+1], replay.reference, replay.personalized)
+            async with inference_semaphore:
+                proba, latency = await asyncio.to_thread(
+                    predict, replay.x[index:index+1], replay.reference, replay.personalized
+                )
             prediction = int(proba[0].argmax())
             confidence = float(proba[0].max())
             replay.controller.observe(prediction, confidence)

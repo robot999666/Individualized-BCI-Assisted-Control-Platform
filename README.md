@@ -70,7 +70,7 @@ backend/.venv/Scripts/python scripts/preview.py
 
 ## 可重复Demo
 
-1. 登录 `demo_guest`（管理员提供密码），创建/选择Demo User。
+1. 在登录旁查看演示访客账号密码，登录后创建/选择演示用户。
 2. 开始个体化校准，确认40条、3ch、EA reference与模型checksum。
 3. 创建Demo实验，选择Profile和Evaluation Set，1×创建会话。
 4. 开始回放，250Hz释放样本，观察真实波形/概率/各阶段耗时。
@@ -79,14 +79,14 @@ backend/.venv/Scripts/python scripts/preview.py
 7. 测试DELAY、DROP、TIMEOUT、FAILURE。紧急求助最高优先并锁定STOP，重置后才能重新播放。
 8. 运行中心查看记录；caregiver可查看和处理脱敏Demo告警，不能上传、校准或修改配置。
 
-四账号：demo_admin / demo_researcher / demo_caregiver / demo_guest，密码仅在私有交付文件中。管理员可以创建账号、改权限/停用账号、查看模型checksum、配置新会话安全阈值（0.5–0.99）和稳定窗数（2–5）。研究人员仅访问自己的参与者、Profile、实验及日志；可上传带真实标签的evaluation做真实预测评分，页面明确训练重叠未知。访客只允许内置公开Demo。当前照护权限限脱敏Demo，真实用户照护授权关系待后续扩展。
+四个角色为管理员、研究人员、照护人员和演示访客。页面只公开低权限演示访客账号；其余账号通过私密交付文件提供。管理员可以创建账号、改权限/停用账号、查看模型校验值、配置新会话安全阈值（0.5–0.99）和稳定窗数（2–5）。研究人员仅访问自己的参与者、校准档案、实验及日志；可上传带真实标签的实验做预测评分。访客只允许内置公开Demo。照护人员可查看并处理获授权的脱敏Demo告警。
 
 ## 安全与运维
 
-- 密码Argon2id；随机不透明Session令牌只以SHA256保存到数据库；HttpOnly + SameSite=Strict cookie，8小时有效，停用/权限变更撤销会话。
+- 密码Argon2id；随机不透明Session令牌只以SHA256保存到数据库；HTTPS 下使用 Secure、HttpOnly、SameSite=Strict Cookie，8小时有效，停用/权限变更撤销会话。
 - 写请求校验Origin；生产要求X-BCI-Request头；登录/API速率限制；生产关闭/docs、/redoc、/openapi.json。接HTTPS后开启SECURE_COOKIE。
 - 上传限制20MiB，NPZ解压64MiB；类型、shape、有限值、标签、路径检查，禁止用户pickle；artifact以随机ID按账号目录隔离。
-- 安全默认STOP：低置信度、预测不稳定、无确认、离线/BUSY/ERROR、过期、异常；单次确认绑定窗口且不能重放；运动许可3秒到期STOP；客户端6秒无轮询自动暂停，重启不自动恢复运动。
+- 安全默认停止：低置信度、预测不稳定、无确认、设备离线/忙碌/故障、过期或异常；单次确认绑定窗口且不能重放；运动许可3秒到期停止；客户端6秒无活动自动暂停，重启不自动恢复运动。
 - 单worker拥有回放时钟和模拟器；当前不支持横向多worker共享实时会话。关闭会话释放内存；持久记录保留。日志仅元数据，不记录EEG/密码/令牌。
 - API和推理计时用perf_counter；回放用monotonic；模拟设备延迟由计划事件实现，标记SIMULATED，未用sleep伪造推理耗时。计算延迟不含采样等待、网络传输或数据库最终commit。
 
@@ -95,13 +95,13 @@ backend/.venv/Scripts/python -m pytest backend/tests -q
 backend/.venv/Scripts/python scripts/benchmark_bci.py
 ```
 
-生产使用本地已验证静态构建 + Nginx + systemd + MySQL；不依赖SSH终端，不需要生产Node进程。见 [部署与故障排查](docs/operations.md)。`deploy/install.sh`只安装已上传的已验证release，`.env`位于/etc、模型在代码目录、数据在/var/lib，避免代码更新覆盖用户产物。
+生产使用本地已验证静态构建 + Nginx + systemd + MySQL；不依赖SSH终端，不需要生产Node进程。当前公网入口为 `https://152.136.191.171:9443`；HTTP 80 仅承载 IP 证书验证和 HTTPS 跳转，443 留给服务器其他项目。证书为 Let's Encrypt 短期 IP 证书，自动续期每6小时检查。见 [部署与故障排查](docs/operations.md)。`deploy/install.sh`只安装已上传的已验证release，`.env`位于/etc、模型在代码目录、数据在/var/lib，避免代码更新覆盖用户产物。
 
 ## 核心API
 
-`/api/v1/health`；`/auth/login|me|logout`；`/users`；`/subjects`；`/subjects/{id}/calibrate-demo|calibrate-upload`；`/profiles`；`/subjects/{id}/experiments/demo|upload`；`/experiments/{id}/evaluate`；`/sessions`；`/sessions/{id}/tick|control|emergency-stop`；`/experiments/{id}/eog-upload`；`/eog/demo-analyze|analyze-upload`；`/sessions/{id}/devices/{device_id}`；`/operations`；`/alerts/{id}/ack`；`/configuration`。
+`/api/v1/health/live`（匿名状态）；`/api/v1/health/detail`（仅管理员）；`/auth/login|me|logout`；`/users`；`/subjects`；`/sessions/{id}/stream`（WebSocket 推送）；`/sessions/{id}/control|emergency-stop`；`/operations`；`/alerts/{id}/ack`；`/configuration`。
 
-流式传输采用每100ms HTTP轮询，服务器依据原采样时钟释放样本，不是动画伪装推理。目前没有WebSocket路径；Nginx保留Upgrade配置供未来扩展。旧批量analyze/demo和RAG接口仅管理员/研究人员在生产可访问，不控制设备。RAG为可选旧功能，当前不在控制UI启用，未配置第三方密钥也可完整演示。
+实时会话经受 Cookie 认证的 WebSocket 由服务端推送脑电块、预测、眼电事件与设备状态；反向代理配置了连接升级和长连接超时。旧批量 analyze/demo 和 RAG 接口仅管理员/研究人员在生产可访问，不控制设备。RAG为可选旧功能，当前不在控制UI启用，未配置第三方密钥也可完整演示。
 
 ## 目录与真实 EOG 数据
 

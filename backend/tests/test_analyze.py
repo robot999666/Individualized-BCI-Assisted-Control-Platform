@@ -121,6 +121,6 @@ def test_health_remains_responsive_while_inference_runs(monkeypatch) -> None:
         assert started.wait(timeout=2)
         health = client.get("/api/v1/health")
         assert health.status_code == 200
-        assert health.json()["model_ready"] is True
+        assert health.json() == {"status": "ok"}
         release.set()
         assert pending.result(timeout=3).status_code == 200

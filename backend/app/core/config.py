@@ -26,6 +26,7 @@ class Settings(BaseSettings):
     session_hours: int = 8
     secure_cookie: bool = False
     demo_password: str | None = None
+    bci_guest_password: str | None = None
     eog_python: Path = _REPO_DIR / "runtime" / "eog-env" / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
     api_prefix: str = "/api/v1"
 

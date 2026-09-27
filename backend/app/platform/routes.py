@@ -1,5 +1,6 @@
 import hashlib
 import asyncio
+from datetime import datetime
 import io
 import json
 import pickle
@@ -8,7 +9,7 @@ import secrets
 import time
 from typing import Literal
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, Response, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, Response, UploadFile, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel, Field
 import numpy as np
 import psutil
@@ -20,7 +21,7 @@ from app.platform import runtime
 from app.platform.database import (Alert, Audit, Command, Device, Experiment, InferenceSession,
     LoginSession, Profile, Session, Subject, User, UserRole, SystemConfig, engine, now, record_audit, serialize, uid)
 from app.platform.inference import PIPELINE_VERSION, calibrate, fingerprint
-from app.platform.security import DUMMY_HASH, current_user, digest, hasher, require, verify
+from app.platform.security import DUMMY_HASH, current_user, digest, hasher, require, verify, user_from_token
 from app.services.bci_model_service import CHANNEL_NAMES
 from app.services.npz_reader import read_bci_npz
 
@@ -97,6 +98,13 @@ async def login(body: Credentials, request: Request, response: Response):
 @router.get('/auth/me')
 async def me(user=Depends(current_user)):
     return user
+
+
+@router.get('/auth/demo-access')
+async def demo_access():
+    if not settings.bci_guest_password:
+        raise HTTPException(503, '演示访客账号未配置')
+    return {'username': 'demo_guest', 'password': settings.bci_guest_password, 'role': 'guest'}
 
 
 @router.post('/auth/logout')
@@ -399,6 +407,8 @@ async def new_session(body:NewSession,user=Depends(require('admin','researcher',
         config=db.get(SystemConfig,'safety')
         if config:
             replay.controller=runtime.SafetyController(**config.value)
+        else:
+            replay.controller=runtime.SafetyController(**SafetyConfig().model_dump())
         for kind in ['wheelchair','care_bed','emergency_call','smart_home']:
             device=Device(id=uid(),session_id=row.id,owner_id=user['id'],kind=kind,
                           data={'mode':'SIMULATED','action':'STOP'})
@@ -431,6 +441,35 @@ async def tick(session_id:str,user=Depends(require('admin','researcher','guest')
             return await runtime.tick(db,replay)
 
 
+@router.websocket('/sessions/{session_id}/stream')
+async def session_stream(websocket: WebSocket, session_id: str):
+    origin = websocket.headers.get('origin')
+    if (settings.production and not origin) or (origin and origin not in settings.effective_cors_origins):
+        await websocket.close(code=4403)
+        return
+    try:
+        user = user_from_token(websocket.cookies.get('bci_session', ''))
+        if user['role'] not in {'admin', 'researcher', 'guest'}:
+            await websocket.close(code=4403)
+            return
+    except HTTPException:
+        await websocket.close(code=4401)
+        return
+    await websocket.accept()
+    try:
+        while True:
+            with Session() as db:
+                replay = get_replay(db, session_id, user)
+                async with replay.lock:
+                    payload = await runtime.tick(db, replay)
+            await websocket.send_json(payload)
+            await asyncio.sleep(.1)
+    except WebSocketDisconnect:
+        return
+    except HTTPException as exc:
+        await websocket.close(code=4404 if exc.status_code == 404 else 4409)
+
+
 class Control(BaseModel):
     action:Literal['play','pause','reset','close']
 
@@ -460,7 +499,8 @@ async def control(session_id:str,body:Control,user=Depends(require('admin','rese
                 replay.cursor=0
                 replay.accumulated=0
                 replay.last={}
-                replay.controller=runtime.SafetyController()
+                config=db.get(SystemConfig,'safety')
+                replay.controller=runtime.SafetyController(**(config.value if config else SafetyConfig().model_dump()))
                 replay.confirmed=-1
                 replay.eog_processed=0
                 replay.eog_provider=runtime.RealEOGProvider()
@@ -470,7 +510,8 @@ async def control(session_id:str,body:Control,user=Depends(require('admin','rese
         db.commit()
         if body.action=='close':
             runtime.live.pop(session_id,None)
-        return {'status':body.action}
+    return {'status':body.action,'safety':{'threshold':replay.controller.threshold,
+        'stable_required':replay.controller.stable_required}}
 
 
 @router.post('/sessions/{session_id}/emergency-stop')
@@ -510,8 +551,7 @@ async def configure_device(session_id:str,device_id:str,body:DeviceConfig,user=D
         return serialize(device)
 
 
-@router.get('/health')
-async def health():
+async def _health_detail():
     database='ok'
     try:
         with engine.connect() as connection:
@@ -538,6 +578,17 @@ async def health():
             'eog':eog_state,'time':now()}
 
 
+@router.get('/health/live')
+@router.get('/health')
+async def health_live():
+    return {'status': 'ok'}
+
+
+@router.get('/health/detail')
+async def health_detail(user=Depends(require('admin'))):
+    return await _health_detail()
+
+
 @router.get('/operations')
 async def operations(user=Depends(current_user)):
     with Session() as db:
@@ -557,7 +608,15 @@ async def operations(user=Depends(current_user)):
                     query=query.where(model.owner_id==user['id'])
             if hasattr(model,'created_at'):
                 query=query.order_by(model.created_at.desc())
-            result[key]=[serialize(row) for row in db.scalars(query.limit(100))]
+            rows=[serialize(row) for row in db.scalars(query.limit(100))]
+            if model is Alert:
+                for item in rows:
+                    item['response_time_seconds'] = (
+                        max(0, (datetime.fromisoformat(item['acknowledged_at']) - datetime.fromisoformat(item['created_at'])).total_seconds())
+                        if item.get('acknowledged_at') else None
+                    )
+                    item['acknowledged_by_username'] = db.get(User, item['acknowledged_by']).username if item.get('acknowledged_by') and db.get(User, item['acknowledged_by']) else None
+            result[key]=rows
         if user['role']=='admin':
             values=list(runtime.request_metrics)
             result['real']={'api_requests':runtime.request_count,'api_latency_ms_mean':float(np.mean(values)) if values else None,
@@ -566,14 +625,27 @@ async def operations(user=Depends(current_user)):
                 'online_users':len(set(db.scalars(select(LoginSession.user_id).where(LoginSession.last_seen>time.time()-300,LoginSession.expires>time.time())))),
                 'live_sessions':len(runtime.live),'recent_inference':list(runtime.inference_metrics)[-10:],
                 'metrics_scope':'single backend process since restart; bounded recent windows'}
-        result['health']=await health()
+        result['health']={'status':'ok'}
+        if user['role']=='admin':
+            result['health']=await _health_detail()
+        acknowledged=[a for a in result['alerts'] if a.get('acknowledged_at')]
+        response_times=[a['response_time_seconds'] for a in acknowledged if a.get('response_time_seconds') is not None]
+        result['alert_response']={'total':len(result['alerts']),'acknowledged':len(acknowledged),
+            'open':sum(a['status']=='OPEN' for a in result['alerts']),
+            'average_seconds':float(np.mean(response_times)) if response_times else None,
+            'fastest_seconds':min(response_times) if response_times else None}
         result['simulated']={'mode':'SIMULATED','device_count':len(result['devices']),
                              'failures_in_recent_commands':sum(c['data'].get('execution_status') in ('FAILED','TIMEOUT') for c in result['commands'])}
         return result
 
 
+class AlertAcknowledgement(BaseModel):
+    result: Literal['已处理','已转交','无法处理'] = '已处理'
+    notes: str = Field(default='', max_length=900)
+
+
 @router.post('/alerts/{alert_id}/ack')
-async def acknowledge(alert_id:str,user=Depends(require('admin','caregiver','researcher'))):
+async def acknowledge(alert_id:str,body:AlertAcknowledgement,user=Depends(require('admin','caregiver','researcher'))):
     with Session() as db:
         alert=db.get(Alert,alert_id)
         if user['role']=='caregiver' and alert:
@@ -585,10 +657,15 @@ async def acknowledge(alert_id:str,user=Depends(require('admin','caregiver','res
             own(alert,user)
         if not alert:
             raise HTTPException(404,'告警不存在')
+        if alert.acknowledged_at:
+            raise HTTPException(409,'此告警已记录处理结果')
         alert.status='ACKNOWLEDGED'
+        alert.acknowledged_at=now()
+        alert.acknowledged_by=user['id']
+        alert.resolution=body.result + (f'：{body.notes.strip()}' if body.notes.strip() else '')
         record_audit(db,user['id'],'alert_acknowledged',alert_id=alert.id)
         db.commit()
-        return serialize(alert)
+        return {**serialize(alert),'response_time_seconds':max(0,(datetime.fromisoformat(alert.acknowledged_at)-datetime.fromisoformat(alert.created_at)).total_seconds())}
 
 class SafetyConfig(BaseModel):
     threshold:float=Field(default=.55,ge=.5,le=.99)
@@ -614,7 +691,7 @@ async def set_configuration(body:SafetyConfig,user=Depends(require('admin'))):
             row.value=body.model_dump()
         record_audit(db,user['id'],'configuration_updated',safety=body.model_dump())
         db.commit()
-    return {'status':'saved','applies_to':'new sessions only',**body.model_dump()}
+    return {'status':'saved','applies_to':'new sessions and sessions after reset',**body.model_dump()}
 
 
 class EvaluationRequest(BaseModel):

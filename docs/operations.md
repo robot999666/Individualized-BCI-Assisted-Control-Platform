@@ -1,6 +1,6 @@
 # 生产部署与运维
 
-访问：http://152.136.191.171/；API：http://152.136.191.171/api/v1 。当前HTTP，没有HTTPS；接域名后配置证书并SECURE_COOKIE=true。禁止真实患者敏感数据进入当前公开演示环境。
+访问：https://152.136.191.171:9443/；HTTP `:80` 仅用于 Let's Encrypt IP 证书验证和跳转。TLS 在应用专用 `:9443` 终止；不占用共享 `:443`。公网 HTTPS Cookie 设置 `SECURE_COOKIE=true`。证书约6天有效，由 systemd 定时器每6小时检查续期并在续期后重载 Nginx。
 
 ## 目录与环境
 
@@ -24,11 +24,11 @@
 | 服务 | 监听 | 管理 |
 |---|---|---|
 | als-bci.service | 127.0.0.1:8000 | 单worker Uvicorn/FastAPI，崩溃3秒后重启 |
-| nginx.service | 0.0.0.0:80 / [::]:80 | 静态前端 + /api反代 |
+| nginx.service | :80、:9443 | :80 处理 ACME 验证和跳转；:9443 提供 TLS 静态前端、API 和 WebSocket 反代 |
 | mysql.service | 127.0.0.1:3306（X插件33060也为loopback） | MySQL8，开机启动 |
 | ssh.service | :22 | 运维 |
 
-安全组仅需22/80/443；主机UFW只允许上述三端口，即使安全组误开其他端口，应用也不监听公网3306/8000。443当前预留，无TLS监听。
+公网入口需要 80（证书 HTTP-01 验证及跳转）与 9443（HTTPS 站点）；保留既有 22、80、443 云端和 UFW 规则，不改写其他项目端口。部署只为 9443 添加 UFW 规则。腾讯云安全组需允许 TCP 9443；FastAPI 8000 与 MySQL 3306/33060 继续只监听回环地址。
 
 ```bash
 sudo systemctl start als-bci nginx mysql
@@ -41,8 +41,10 @@ sudo tail -n 100 /var/log/nginx/access.log  # 前端访问
 sudo tail -n 100 /var/log/nginx/error.log   # 前端/反代错误
 sudo systemctl status mysql --no-pager
 sudo tail -n 100 /var/log/mysql/error.log
-curl -fsS http://127.0.0.1:8000/api/v1/health
-curl -fsS http://127.0.0.1/api/v1/health
+curl -fsS http://127.0.0.1:8000/api/v1/health/live
+curl -fsS https://152.136.191.171:9443/api/v1/health/live
+sudo certbot renew --dry-run --run-deploy-hooks
+systemctl status als-bci-certbot-renew.timer --no-pager
 sudo ss -lntp
 sudo ufw status
 ```
@@ -59,7 +61,7 @@ sudo ufw status
 | model load failed | 查两个模型SHA256、文件权限、NumPy2.2.6/SciPy1.15.3/sklearn1.6.1/MNE1.9.0；不能回退Mock |
 | MySQL connection failed | systemctl mysql、loopback监听、数据库账号、DATABASE_URL；不要输出密码 |
 | Calibration failed | 查NPZ类型/shape/250Hz/μV/有限值/非零能量、磁盘容量与artifacts写权限；demo manifest checksum |
-| WebSocket disconnected | 当前版本使用HTTP polling，无WS端点；先查/api请求/cookie/Origin/会话409；将来接WS再查Upgrade头 |
+| WebSocket disconnected | 检查 HTTPS Cookie、Origin 白名单、9443 端口与 Nginx Upgrade 头；会话关闭或服务重启后需重新创建 |
 | device simulator offline | 工作台选择ACK恢复SIMULATED ONLINE，查STOP/告警；重置紧急锁定再回放 |
 | disk full | df -h；按保留策略备份/清理日志、过期artifact，勿直接删除仍被Profile引用的文件 |
 | memory high | free -h、systemctl status、查看活动会话；关闭会话、限制上传；单worker，必要时扩容 |

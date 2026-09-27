@@ -2,6 +2,8 @@
 import io
 import time
 import uuid
+import asyncio
+import threading
 import numpy as np
 import pytest
 from fastapi.testclient import TestClient
@@ -9,7 +11,7 @@ from sqlalchemy import select, text
 
 from app.main import app
 from app.platform import runtime
-from app.platform.database import Session, User, UserRole, Role, Profile, Device, Command, engine
+from app.platform.database import Session, User, UserRole, Role, Profile, Device, Command, engine, SystemConfig
 from app.platform.security import hasher
 from app.platform.safety import SafetyController
 from app.platform.inference import calibrate, predict
@@ -70,7 +72,10 @@ def complete_window(client,session,index):
 def test_mysql_health_and_rbac(clients):
     with engine.connect() as connection:
         assert connection.execute(text('SELECT 1')).scalar()==1
-    assert clients['admin'].get('/api/v1/health').json()['database']=='ok'
+    assert clients['guest'].get('/api/v1/health/live').json()=={'status':'ok'}
+    assert set(clients['guest'].get('/api/v1/health/live').json())=={'status'}
+    assert clients['guest'].get('/api/v1/health/detail').status_code==403
+    assert clients['admin'].get('/api/v1/health/detail').json()['database']=='ok'
     assert clients['admin'].get('/api/v1/users').status_code==200
     for role in ['researcher','caregiver','guest']:
         assert clients[role].get('/api/v1/users').status_code==403
@@ -133,7 +138,19 @@ def test_real_closed_loop_profile_reload_and_offline(clients):
     assert response['last']['decision']=='STOP'
     assert response['last']['reason']=='DEVICE_OFFLINE'
     operations=client.get('/api/v1/operations').json()
-    assert any(a['kind']=='DEVICE_OFFLINE' for a in operations['alerts'])
+    offline_alert=next(a for a in operations['alerts'] if a['kind']=='DEVICE_OFFLINE')
+    assert offline_alert['acknowledged_at'] is None
+    response=clients['caregiver'].post(f"/api/v1/alerts/{offline_alert['id']}/ack",json={'result':'已处理','notes':'评委演示确认'})
+    assert response.status_code==200,response.text
+    acknowledged=response.json()
+    assert acknowledged['acknowledged_at'] and acknowledged['acknowledged_by']
+    assert acknowledged['resolution']=='已处理：评委演示确认'
+    assert acknowledged['response_time_seconds']>=0
+    updated=client.get('/api/v1/operations').json()
+    row=next(a for a in updated['alerts'] if a['id']==offline_alert['id'])
+    assert row['acknowledged_by_username'].startswith('test_caregiver_')
+    assert updated['alert_response']['acknowledged']>=1
+    assert clients['caregiver'].post(f"/api/v1/alerts/{offline_alert['id']}/ack",json={'result':'已处理'}).status_code==409
     assert any(a['action']=='safety_decision' for a in operations['audit_logs'])
     assert any(c['data']['execution_status']=='ACK' for c in operations['commands'])
     emergency=post(client,f"/sessions/{session['id']}/emergency-stop")
@@ -141,6 +158,24 @@ def test_real_closed_loop_profile_reload_and_offline(clients):
     assert client.post(f"/api/v1/sessions/{session['id']}/control",json={'action':'play'}).status_code==409
     post(client,f"/sessions/{session['id']}/control",{'action':'reset'})
     assert runtime.live[session['id']].controller.emergency is False
+
+
+def test_reset_reloads_saved_safety_configuration(clients):
+    admin, guest = clients['admin'], clients['guest']
+    original = admin.get('/api/v1/configuration').json()['safety']
+    target = {'threshold': .83, 'stable_required': 4}
+    try:
+        assert admin.put('/api/v1/configuration', json=target).status_code == 200
+        _, _, _, session = setup_demo(guest)
+        controller = runtime.live[session['id']].controller
+        assert (controller.threshold, controller.stable_required) == (.83, 4)
+        post(guest, f"/sessions/{session['id']}/emergency-stop")
+        post(guest, f"/sessions/{session['id']}/control", {'action':'reset'})
+        controller = runtime.live[session['id']].controller
+        assert (controller.threshold, controller.stable_required) == (.83, 4)
+        assert controller.emergency is False
+    finally:
+        admin.put('/api/v1/configuration', json=original)
 
 
 @pytest.mark.parametrize('scenario,expected',[('DELAY','ACK'),('DROP','TIMEOUT'),('TIMEOUT','TIMEOUT'),('FAILURE','FAILED')])
@@ -322,3 +357,43 @@ def test_watchdog_client_disconnect_and_csrf(clients):
     assert replay.running is False
     assert any(a['kind']=='CLIENT_TIMEOUT' for a in client.get('/api/v1/operations').json()['alerts'])
     assert client.post('/api/v1/auth/logout',headers={'Origin':'https://untrusted.example'}).status_code==403
+
+
+def test_session_stream_pushes_ticks_without_http_polling(clients):
+    client=clients['guest'];_,_,_,session=setup_demo(client)
+    with client.websocket_connect(
+        f"/api/v1/sessions/{session['id']}/stream",
+        headers={'Origin':'http://localhost:3000'},
+    ) as socket:
+        frame=socket.receive_json()
+        assert frame['id']==session['id']
+        assert 'cursor' in frame and 'last' in frame
+
+
+def test_model_inference_runs_off_event_loop(clients,monkeypatch):
+    import app.platform.runtime as replay_runtime
+    client=clients['guest'];_,_,_,session=setup_demo(client)
+    replay=runtime.live[session['id']]
+    replay.running=True;replay.started=time.monotonic()-3
+    replay.eog_data=None
+    replay.samples_due=lambda:501
+    entered=threading.Event();release=threading.Event()
+    original=replay_runtime.predict
+    def slow_prediction(*args):
+        entered.set()
+        if not release.wait(3):raise TimeoutError('test release was not set')
+        return original(*args)
+    monkeypatch.setattr(replay_runtime,'predict',slow_prediction)
+
+    async def exercise():
+        with Session() as db:
+            task=asyncio.create_task(replay_runtime.tick(db,replay))
+            assert await asyncio.to_thread(entered.wait,2)
+            await asyncio.wait_for(asyncio.sleep(.05),.2)
+            assert not task.done()
+            release.set()
+            await asyncio.wait_for(task,5)
+    try:asyncio.run(exercise())
+    finally:
+        release.set()
+        if hasattr(replay,'samples_due'):del replay.samples_due

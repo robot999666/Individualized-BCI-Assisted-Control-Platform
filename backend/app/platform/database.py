@@ -127,6 +127,9 @@ class Alert(Base):
     kind = Column(String(48), nullable=False)
     status = Column(String(24), default="OPEN")
     created_at = Column(String(40), default=now)
+    acknowledged_at = Column(String(40), nullable=True)
+    acknowledged_by = Column(String(32), ForeignKey("users.id"), nullable=True)
+    resolution = Column(String(1000), nullable=True)
 
 
 class Audit(Base):

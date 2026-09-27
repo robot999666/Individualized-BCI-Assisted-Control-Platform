@@ -1,4 +1,4 @@
-"""Verify a deployed release over HTTP using private account credentials.
+"""Verify a deployed release over HTTPS using private account credentials.
 
 Never prints passwords, cookies, raw EEG/EOG, or full API bodies.
 Run locally on the server with root's private accounts file.
@@ -13,7 +13,7 @@ import urllib.request
 
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--base', default='http://127.0.0.1')
+parser.add_argument('--base', default='https://152.136.191.171:9443')
 parser.add_argument('--accounts', type=Path, required=True)
 parser.add_argument('--output', type=Path, required=True)
 parser.add_argument('--reload-profile', type=Path)
@@ -23,7 +23,8 @@ accounts = json.loads(args.accounts.read_text())
 
 class Client:
     def __init__(self):
-        self.opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()))
+        self.cookies = http.cookiejar.CookieJar()
+        self.opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(self.cookies))
 
     def request(self, path, body=None, expected=200):
         data = json.dumps(body).encode() if body is not None else None
@@ -43,13 +44,18 @@ for role, credentials in accounts.items():
     client = Client()
     result = client.request('/auth/login', credentials)
     assert result['role'] == role
+    if role == 'guest':
+        session_cookie = next(cookie for cookie in client.cookies if cookie.name == 'bci_session')
+        assert session_cookie.secure, 'bci_session cookie must be Secure over HTTPS'
     client.request('/users', expected=200 if role=='admin' else 403)
     clients[role] = client
 guest=clients['guest']
-health=guest.request('/health')
-assert health['status']=='ok' and health['database_engine']=='mysql'
-assert health['eog']['status']=='ok' and health['eog']['mode']=='REAL_MODEL'
-report={'timestamp_utc':time.strftime('%Y-%m-%dT%H:%M:%SZ',time.gmtime()),'health':health,
+health=guest.request('/health/live')
+assert health=={'status':'ok'}
+detail=clients['admin'].request('/health/detail')
+assert detail['status']=='ok' and detail['database_engine']=='mysql'
+assert detail['eog']['status']=='ok' and detail['eog']['mode']=='REAL_MODEL'
+report={'timestamp_utc':time.strftime('%Y-%m-%dT%H:%M:%SZ',time.gmtime()),'health':detail,
         'roles_verified':list(clients),'eog_mode':'REAL_MODEL','device_mode':'SIMULATED'}
 if args.reload_profile:
     previous=json.loads(args.reload_profile.read_text())
@@ -90,7 +96,9 @@ else:
     guest.request(f'/sessions/{sid}/control',{'action':'pause'})
     ops=guest.request('/operations')
     alert=next(a for a in ops['alerts'] if a['kind']=='DEVICE_OFFLINE' and a['session_id']==sid)
-    clients['caregiver'].request(f"/alerts/{alert['id']}/ack",{})
+    acknowledged=clients['caregiver'].request(f"/alerts/{alert['id']}/ack",{'result':'已处理','notes':'公网部署验收'})
+    assert acknowledged['acknowledged_at'] and acknowledged['acknowledged_by']
+    assert acknowledged['response_time_seconds']>=0
     assert any(a['action']=='safety_decision' for a in ops['audit_logs'])
     assert 'real' not in ops and 'real' in clients['admin'].request('/operations')
     guest.request('/configuration', expected=403)
@@ -101,6 +109,7 @@ else:
         'session_id':sid,'calibration_trials':profile['calibration_sample_count'],
         'profile_kind':profile['source']['artifact_kind'],'real_predictions':seen,
         'real_eog_confirmation':True,'simulated_ack':True,'offline_rejected':True,
-        'alert_acknowledged':True,'audit_verified':True,'emergency_latched':True})
+        'alert_acknowledged':True,'alert_response_time_seconds':acknowledged['response_time_seconds'],
+        'audit_verified':True,'emergency_latched':True})
 args.output.write_text(json.dumps(report,indent=2,ensure_ascii=False))
 print(json.dumps({k:v for k,v in report.items() if k not in {'health','real_predictions','profile_id','experiment_id','session_id'}},ensure_ascii=False))
