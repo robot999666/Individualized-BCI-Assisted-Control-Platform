@@ -61,12 +61,12 @@ class Settings(BaseSettings):
     # 项目知识助手（仅后端读取；不得使用 NEXT_PUBLIC_* 暴露）
     openai_base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
     openai_api_key: str | None = None
-    openai_model: str = "deepseek-v4-flash-0731"
+    openai_model: str = "deepseek-v4.1-flash"
     assistant_top_k: int = 5
     assistant_question_max_chars: int = 500
     assistant_context_max_chars: int = 8_000
     assistant_timeout_seconds: float = 45.0
-    assistant_max_output_tokens: int = 700
+    assistant_max_output_tokens: int = 1200
 
 
 @lru_cache

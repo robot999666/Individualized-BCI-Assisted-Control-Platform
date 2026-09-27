@@ -6,7 +6,7 @@ import type {
 } from "./types";
 
 const API_BASE = (
-  process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000"
+  process.env.NEXT_PUBLIC_API_BASE_URL ?? ""
 ).replace(/\/+$/, "");
 
 export class ApiError extends Error {
@@ -30,6 +30,8 @@ async function request<T>(
   try {
     response = await fetch(`${API_BASE}${path}`, {
       ...init,
+      credentials: "include",
+      headers: { ...Object.fromEntries(new Headers(init?.headers).entries()), "X-BCI-Request": "1" },
       signal: controller.signal,
     });
   } catch (error) {

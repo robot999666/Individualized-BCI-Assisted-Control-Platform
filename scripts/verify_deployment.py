@@ -57,6 +57,14 @@ assert detail['status']=='ok' and detail['database_engine']=='mysql'
 assert detail['eog']['status']=='ok' and detail['eog']['mode']=='REAL_MODEL'
 report={'timestamp_utc':time.strftime('%Y-%m-%dT%H:%M:%SZ',time.gmtime()),'health':detail,
         'roles_verified':list(clients),'eog_mode':'REAL_MODEL','device_mode':'SIMULATED'}
+catalog=guest.request('/data-sources')
+assert len(catalog)==4 and all(source['available'] for source in catalog)
+rag=guest.request('/assistant/health')
+assert rag['status']=='ok' and rag['model']=='deepseek-v4.1-flash' and rag['document_count']==4
+answer=guest.request('/assistant/chat',{'question':'EEG、EOG和人工急停如何配合？'})
+assert answer['answer'] and answer['sources']
+report.update({'available_sources':[source['id'] for source in catalog],
+               'rag_model':rag['model'],'rag_answer_with_sources':True})
 if args.reload_profile:
     previous=json.loads(args.reload_profile.read_text())
     profile_id,experiment_id=previous['profile_id'],previous['experiment_id']
@@ -86,6 +94,8 @@ else:
     assert any(c['data'].get('session_id')==sid and c['data']['source']=='EEG+REAL_EOG'
                and c['data']['execution_status']=='ACK' for c in ops['commands'])
     device=data['devices'][0]
+    assert device['data']['heading']==30 and device['data']['ack_action']=='RIGHT'
+    assert device['data']['ack_command_id'] and device['data']['ack_latency_ms']>=0
     guest.request(f"/sessions/{sid}/devices/{device['id']}",{'scenario':'OFFLINE'})
     deadline=time.monotonic()+5
     while time.monotonic()<deadline:
@@ -105,11 +115,15 @@ else:
     emergency=guest.request(f'/sessions/{sid}/emergency-stop',{})
     assert emergency['decision']['reason']=='EMERGENCY_LATCHED'
     guest.request(f'/sessions/{sid}/control',{'action':'play'},expected=409)
+    reset=guest.request(f'/sessions/{sid}/control',{'action':'reset'})['snapshot']
+    assert reset['cursor']==0 and not reset['emergency_latched']
+    assert all(d['data']['action']=='STOP' and d['data']['heading']==0 for d in reset['devices'])
+    guest.request(f'/sessions/{sid}/control',{'action':'close'})
     report.update({'profile_id':profile_id,'experiment_id':experiment_id,
         'session_id':sid,'calibration_trials':profile['calibration_sample_count'],
         'profile_kind':profile['source']['artifact_kind'],'real_predictions':seen,
         'real_eog_confirmation':True,'simulated_ack':True,'offline_rejected':True,
         'alert_acknowledged':True,'alert_response_time_seconds':acknowledged['response_time_seconds'],
-        'audit_verified':True,'emergency_latched':True})
+        'audit_verified':True,'emergency_latched':True,'reset_devices_verified':True})
 args.output.write_text(json.dumps(report,indent=2,ensure_ascii=False))
 print(json.dumps({k:v for k,v in report.items() if k not in {'health','real_predictions','profile_id','experiment_id','session_id'}},ensure_ascii=False))

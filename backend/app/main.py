@@ -65,13 +65,13 @@ async def platform_guard(request: Request, call_next):
             return JSONResponse({"detail": "Origin rejected"}, status_code=403)
         if settings.production and request.headers.get("x-bci-request") != "1":
             return JSONResponse({"detail": "Request header required"}, status_code=403)
-    # Legacy batch/RAG routes are research-only in production and never drive devices.
-    if settings.production and request.url.path.startswith(("/api/v1/analyze", "/api/v1/demo", "/api/v1/assistant")):
+    # Batch inference is research-only; project Q&A is available to every signed-in role.
+    if settings.production and request.url.path.startswith(("/api/v1/analyze", "/api/v1/demo", "/api/v1/assistant/chat")):
         from app.platform.security import current_user
         from fastapi import HTTPException
         try:
             user = current_user(request)
-            if user["role"] not in {"admin", "researcher"}:
+            if not request.url.path.startswith("/api/v1/assistant/chat") and user["role"] not in {"admin", "researcher"}:
                 raise HTTPException(403, "Research role required")
         except HTTPException as exc:
             return JSONResponse({"detail": exc.detail}, status_code=exc.status_code)

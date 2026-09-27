@@ -10,6 +10,7 @@ from app.schemas.assistant import (
 )
 from app.services.project_assistant import (
     AssistantConfigurationError,
+    AssistantBusyError,
     AssistantProviderError,
 )
 
@@ -34,6 +35,8 @@ def assistant_health() -> AssistantHealthResponse:
 async def assistant_chat(payload: AssistantQuestion) -> AssistantChatResponse:
     try:
         return await assistant_service.chat(payload.question)
+    except AssistantBusyError as exc:
+        raise HTTPException(status_code=429, detail="智答正在处理其他问题，请稍后再试。") from exc
     except AssistantConfigurationError as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,

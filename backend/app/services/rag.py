@@ -41,12 +41,9 @@ class ProjectKnowledgeIndex:
         return bool(self.chunks and self._matrix is not None and not self.error)
 
     def _candidate_paths(self) -> list[Path]:
-        candidates = [
-            self.repo_dir / "README.md",
-            self.repo_dir / "frontend" / "README.md",
-            self.repo_dir / "algorithms" / "bci_4class" / "README.md",
-        ]
-        docs_dir = self.repo_dir / "docs"
+        # Only reviewed public knowledge: exclude deployment/runbooks and private runtime files.
+        candidates = []
+        docs_dir = self.repo_dir / "docs" / "rag"
         if docs_dir.is_dir():
             candidates.extend(sorted(docs_dir.rglob("*.md")))
         return [path for path in candidates if path.is_file()]
@@ -190,4 +187,8 @@ class ProjectKnowledgeIndex:
             expansions.append("四分类意图左转右转直行停止")
         if "数字孪生" in query or "3D" in query.upper():
             expansions.append("3D数字孪生演示运动想象脑电轮椅指令")
+        if "校准" in query or "校正" in query:
+            expansions.append("个体化校准EA对齐个人CSP LDA同源数据")
+        if "EOG" in query.upper() or "眼电" in query or "眨眼" in query:
+            expansions.append("EOG眼电SVM双眨眼确认候选安全")
         return " ".join(expansions)

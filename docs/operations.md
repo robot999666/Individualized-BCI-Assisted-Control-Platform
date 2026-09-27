@@ -17,6 +17,7 @@
 服务器只运行已在本地验证的代码；先准备apt的nginx/mysql-server/python3-venv。
 上传白名单release包（代码、模型、自测样本、静态构建、deploy；不含.env/私钥/raw GDF/缓存），解压到`/opt/als-bci/current`。
 单独将最小demo放`/var/lib/als-bci/demo`，owner为als-bci。执行`sudo bash /opt/als-bci/current/deploy/install.sh`。
+多来源工作台还需将本地 `prepare_sources.py` 生成的 `a01-22ch`、`a02-3ch`、`a02-22ch` 子目录连同各自 manifest / calibration / evaluation / EOG 一并私下复制到 Demo 目录，保留相对结构；缺失目录仅禁用对应来源。安装后端依赖必须包含固定版本 websockets，且 Nginx / 本地 preview 必须转发 Upgrade，否则无法建立实时流。原始 GDF 不部署。
 脚本生成随机账号密码而不输出，凭据仅`/root/als-bci-accounts.json`，通过SSH私下交付。
 
 ## 服务

@@ -53,6 +53,7 @@ class Replay:
     eog_protocol: str = "未配对真实EOG输入；仅显示EEG推理，不产生移动确认。"
     generation: int = 0
     lock: object = field(default_factory=asyncio.Lock)
+    streams: int = 0
 
     def samples_due(self):
         elapsed = self.accumulated + (time.monotonic() - self.started if self.running else 0)
@@ -82,6 +83,29 @@ def stop_all(db, replay, reason):
     for cmd in db.scalars(select(Command).where(Command.owner_id == replay.owner)):
         if cmd.data.get("session_id") == replay.id and cmd.data.get("execution_status") == "PENDING":
             cmd.data = {**cmd.data, "execution_status": "CANCELLED", "reason": reason}
+
+
+def snapshot(db, replay, begin=None, chunk=None):
+    row = db.get(InferenceSession, replay.id)
+    return {"id": replay.id, "cursor": replay.cursor,
+            "sample_start": replay.cursor if begin is None else begin,
+            "samples": [[] for _ in range(replay.x.shape[1])] if chunk is None else chunk,
+            "sampling_rate": 250, "speed": replay.speed, "running": replay.running,
+            "status": row.status, "generation": replay.generation,
+            "emergency_latched": replay.controller.emergency,
+            "stable_count": replay.controller.count, "selected_device": replay.selected_device,
+            "eog_available": replay.eog_data is not None,
+            "total_samples": len(replay.x)*501, "last": replay.last, "eog": replay.eog_last,
+            "eog_protocol": replay.eog_protocol,
+            "devices": [serialize(d) for d in sorted(db.scalars(select(Device).where(Device.session_id == replay.id)),
+                        key=lambda d:(d.id!=replay.selected_device,d.kind))]}
+
+
+def interrupted(db, replay):
+    # A control request committed while inference released the event loop. Discard stale writes.
+    db.rollback()
+    db.expire_all()
+    return snapshot(db, replay)
 
 
 def issue(db, replay, event="NO_SIGNAL"):
@@ -137,7 +161,9 @@ def advance_devices(db, replay):
             alarm(db, replay, "COMMAND_TIMEOUT")
         else:
             device.state = "ONLINE"
-            device.data = {**SimulatorAdapter(device.kind).execute(command.data["action"], device.data), "mode": "SIMULATED"}
+            device.data = {**SimulatorAdapter(device.kind).execute(command.data["action"], device.data), "mode": "SIMULATED",
+                           "ack_command_id":command.id,"ack_action":command.data["action"],
+                           "ack_latency_ms":command.data["latency_ms"],"ack_at":now()}
             replay.motion_deadline = current + 3
         record_audit(db, replay.owner, "device_result", command_id=command_id, status=command.data["execution_status"])
     if replay.motion_deadline and current > replay.motion_deadline:
@@ -149,7 +175,7 @@ async def tick(db, replay):
     generation=replay.generation
     replay.last_poll = time.monotonic()
     advance_devices(db, replay)
-    due = replay.samples_due()
+    due = replay.samples_due() if replay.running else replay.cursor
     # Never skip a completed window when a polling client falls behind.
     end = min(due, (replay.cursor // 501 + 1) * 501)
     # Process signal events in sample order even when a poll spans both streams.
@@ -176,6 +202,8 @@ async def tick(db, replay):
                 proba, latency = await asyncio.to_thread(
                     predict, replay.x[index:index+1], replay.reference, replay.personalized
                 )
+            if replay.generation != generation or not replay.running:
+                return interrupted(db, replay)
             prediction = int(proba[0].argmax())
             confidence = float(proba[0].max())
             replay.controller.observe(prediction, confidence)
@@ -189,9 +217,13 @@ async def tick(db, replay):
             inference_metrics.append(dict(replay.last))
             db.add(InferenceRecord(session_id=replay.id, owner_id=replay.owner, data=dict(replay.last)))
         except Exception:
+            if replay.generation != generation:
+                return interrupted(db, replay)
             stop_all(db, replay, "INFERENCE_ERROR")
             alarm(db, replay, "INFERENCE_ERROR")
             replay.running = False
+            replay.controller.emergency = True
+            db.get(InferenceSession, replay.id).status = "PAUSED"
             replay.last = {"decision": "STOP", "reason": "INFERENCE_ERROR"}
             record_audit(db, replay.owner, "inference_error", session_id=replay.id)
     # EOG inference only receives windows that have actually arrived at replay time.
@@ -217,7 +249,7 @@ async def tick(db, replay):
             try:
                 results=await asyncio.to_thread(analyze_batch,windows,replay.eog_prefiltered)
                 if replay.generation!=generation or not replay.running:
-                    results=[]
+                    return interrupted(db, replay)
                 for result,(trial,offset) in zip(results,offsets):
                     original_start=trial*250 if replay.eog_sequence else replay.eog_starts[trial]+offset if replay.eog_starts else trial*501+offset
                     event=replay.eog_provider.consume(result,original_start,(original_start+250)/250)
@@ -227,21 +259,28 @@ async def tick(db, replay):
                         issue(db,replay,event)
                         advance_devices(db,replay)
                         record_audit(db,replay.owner,'eog_model_event',session_id=replay.id,event=event,probability=result['probability'])
+                        if event == 'EMERGENCY':
+                            replay.accumulated += time.monotonic() - replay.started
+                            replay.running = False
+                            db.get(InferenceSession, replay.id).status = 'PAUSED'
+                            break
             except Exception:
+                if replay.generation != generation:
+                    return interrupted(db, replay)
                 replay.running=False
                 replay.controller.emergency=True
                 stop_all(db,replay,'EOG_MODEL_ERROR')
                 alarm(db,replay,'EOG_MODEL_ERROR')
                 replay.eog_last={'mode':'REAL_MODEL','event':'ERROR','reason':'EOG_MODEL_ERROR'}
-    if end == len(replay.x)*501:
+                replay.last={**replay.last,'decision':'STOP','reason':'EOG_MODEL_ERROR'}
+                db.get(InferenceSession, replay.id).status = 'PAUSED'
+    if end == len(replay.x)*501 and replay.running:
         replay.running = False
+        stop_all(db, replay, 'REPLAY_COMPLETE')
+        replay.last={**replay.last,'decision':'STOP','reason':'REPLAY_COMPLETE'}
         db.get(InferenceSession, replay.id).status = "COMPLETE"
     db.commit()
-    return {"id": replay.id, "cursor": end, "sample_start": begin, "samples": chunk,
-            "sampling_rate": 250, "speed": replay.speed, "running": replay.running,
-            "total_samples": len(replay.x)*501, "last": replay.last, "eog": replay.eog_last,
-            "eog_protocol":replay.eog_protocol,
-            "devices": [serialize(d) for d in db.scalars(select(Device).where(Device.session_id == replay.id))]}
+    return snapshot(db, replay, begin, chunk)
 
 
 async def watchdog():
@@ -252,9 +291,12 @@ async def watchdog():
                 for replay in list(live.values()):
                     advance_devices(db, replay)
                     if replay.running and time.monotonic() - replay.last_poll > 6:
+                        replay.generation += 1
                         replay.accumulated += time.monotonic() - replay.started
                         replay.running = False
                         replay.controller.count = 0
+                        replay.eog_provider = RealEOGProvider()
+                        replay.last = {**replay.last, 'decision':'STOP', 'reason':'CLIENT_TIMEOUT'}
                         stop_all(db, replay, "CLIENT_TIMEOUT")
                         alarm(db, replay, "CLIENT_TIMEOUT")
                         db.get(InferenceSession, replay.id).status = "PAUSED"

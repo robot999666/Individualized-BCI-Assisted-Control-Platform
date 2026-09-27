@@ -24,6 +24,7 @@ from app.platform.inference import PIPELINE_VERSION, calibrate, fingerprint
 from app.platform.security import DUMMY_HASH, current_user, digest, hasher, require, verify, user_from_token
 from app.services.bci_model_service import CHANNEL_NAMES
 from app.services.npz_reader import read_bci_npz
+from app.platform.sources import PRESETS, directory, load_source, check_pair
 
 router = APIRouter()
 settings = get_settings()
@@ -49,16 +50,27 @@ def artifact_path(relative):
 
 
 def demo(split):
-    path = settings.demo_data_dir / f'{split}.npz'
-    manifest_path = settings.demo_data_dir / 'manifest.json'
-    if not path.is_file() or not manifest_path.is_file():
-        raise HTTPException(503, 'Demo数据未准备；运行 scripts/prepare_demo.py')
-    manifest = json.loads(manifest_path.read_text(encoding='utf-8'))
-    if sha(path) != manifest[split]['npz_sha256']:
-        raise HTTPException(503, 'Demo checksum不匹配')
-    batch = read_bci_npz(path.name, path.read_bytes(), 250, 'uV')
-    return batch.x, {'dataset': 'BCI IV 2a', 'subject': manifest['subject'], 'split': split,
-                     'protocol': manifest['protocol'], **manifest[split]}
+    return load_source('a01-3ch', split)
+
+
+@router.get('/data-sources')
+async def data_sources(user=Depends(current_user)):
+    result = []
+    for source_id, (name, _) in PRESETS.items():
+        try:
+            _, calibration = load_source(source_id, 'calibration')
+            _, evaluation = load_source(source_id, 'evaluation')
+            root = directory(source_id)
+            manifest = json.loads((root / 'manifest.json').read_text(encoding='utf-8'))
+            pairing = manifest['eog_pairing']
+            available = sha(root / 'eog_demo.npz') == pairing['sha256']
+            result.append({'id': source_id, 'name': name, 'available': available,
+                'subject': calibration['subject'], 'channels': len(calibration['channels']),
+                'calibration_trials': len(calibration['trials']), 'evaluation_trials': len(evaluation['trials']),
+                'eog_protocol': pairing['protocol']})
+        except (HTTPException, OSError, KeyError, ValueError):
+            result.append({'id': source_id, 'name': name, 'available': False})
+    return result
 
 
 class Credentials(BaseModel):
@@ -113,10 +125,13 @@ async def logout(request: Request, response: Response, user=Depends(current_user
         row = db.get(LoginSession, digest(request.cookies.get('bci_session','')))
         if row:
             db.delete(row)
-        for replay in runtime.live.values():
+        for replay in list(runtime.live.values()):
             if replay.owner == user['id']:
+                replay.generation+=1
                 runtime.stop_all(db, replay, 'LOGOUT')
                 replay.running = False
+                db.get(InferenceSession,replay.id).status='CLOSED'
+                runtime.live.pop(replay.id,None)
         record_audit(db, user['id'], 'logout')
         db.commit()
     response.delete_cookie('bci_session', path='/')
@@ -166,10 +181,13 @@ async def update_user(user_id: str, body: UserUpdate, user=Depends(require('admi
         db.get(UserRole,user_id).role=body.role
         for session in db.scalars(select(LoginSession).where(LoginSession.user_id==user_id)):
             db.delete(session)
-        for replay in runtime.live.values():
+        for replay in list(runtime.live.values()):
             if replay.owner==user_id:
+                replay.generation+=1
                 runtime.stop_all(db,replay,'PERMISSION_CHANGED')
                 replay.running=False
+                db.get(InferenceSession,replay.id).status='CLOSED'
+                runtime.live.pop(replay.id,None)
         record_audit(db,user['id'],'permissions_changed',user_id=user_id,role=body.role,active=body.active)
         db.commit()
         return {'status':'ok'}
@@ -178,6 +196,11 @@ async def update_user(user_id: str, body: UserUpdate, user=Depends(require('admi
 class NewSubject(BaseModel):
     name: str = Field(min_length=1,max_length=80)
     is_demo: bool = True
+
+    def model_post_init(self, context):
+        self.name = self.name.strip()
+        if not self.name:
+            raise ValueError('用户名称不能为空')
 
 
 @router.get('/subjects')
@@ -247,12 +270,12 @@ async def profiles(user=Depends(current_user)):
 
 
 @router.post('/subjects/{subject_id}/calibrate-demo')
-async def calibrate_demo(subject_id:str,user=Depends(require('admin','researcher','guest'))):
+async def calibrate_demo(subject_id:str,source_id:str='a01-3ch',user=Depends(require('admin','researcher','guest'))):
     with Session() as db:
         subject=own(db.get(Subject,subject_id),user)
         if not subject.is_demo:
             raise HTTPException(422,'请选择Demo用户，避免把公开数据归为真实用户校准')
-        x,source=demo('calibration')
+        x,source=load_source(source_id,'calibration')
         return await save_profile(db,subject,user,x,source)
 
 
@@ -262,13 +285,16 @@ async def upload_batch(file):
 
 
 @router.post('/subjects/{subject_id}/calibrate-upload')
-async def calibrate_upload(subject_id:str,file:UploadFile=File(...),user=Depends(require('admin','researcher'))):
+async def calibrate_upload(subject_id:str,file:UploadFile=File(...),source_id:str=Form('default',min_length=1,max_length=80),user=Depends(require('admin','researcher'))):
+    if not source_id.strip():
+        raise HTTPException(422,'采集来源标识不能为空')
     batch,checksum=await upload_batch(file)
     with Session() as db:
         subject=own(db.get(Subject,subject_id),user)
         if subject.is_demo:
             raise HTTPException(422,'上传数据请选择私有研究用户；Demo只使用内置公开数据')
         return await save_profile(db,subject,user,batch.x,{'dataset':'USER_UPLOAD','sha256':checksum,'split':'calibration',
+                                                   'source_id':f'upload:{subject.id}:{source_id.strip()}',
                                                    'protocol':'User-supplied; independent validation not verified'},batch.y)
 
 
@@ -277,11 +303,13 @@ async def reset_profile(profile_id:str,user=Depends(require('admin','researcher'
     with Session() as db:
         profile=own(db.get(Profile,profile_id),user)
         profile.status='REVOKED'
-        for replay in runtime.live.values():
+        for replay in list(runtime.live.values()):
             if replay.profile==profile_id:
+                replay.generation+=1
                 runtime.stop_all(db,replay,'PROFILE_REVOKED')
                 replay.running=False
                 db.get(InferenceSession,replay.id).status='CLOSED'
+                runtime.live.pop(replay.id,None)
         record_audit(db,user['id'],'profile_revoked',profile_id=profile.id)
         db.commit()
     return {'status':'REVOKED'}
@@ -295,15 +323,18 @@ def save_experiment(db,subject,user,x,source,y=None):
     np.savez_compressed(path,X=x,**({'y':y} if y is not None else {}))
     row.source={**source,'sha256':sha(path),'samples':len(x),'channels':x.shape[1]}
     if source.get('dataset')=='BCI IV 2a':
-        eog_path=settings.demo_data_dir/'eog_demo.npz'
-        manifest=json.loads((settings.demo_data_dir/'manifest.json').read_text(encoding='utf-8'))
+        root=directory(source.get('source_id','a01-3ch'))
+        eog_path=root/'eog_demo.npz'
+        manifest=json.loads((root/'manifest.json').read_text(encoding='utf-8'))
         if not eog_path.exists() or sha(eog_path)!=manifest['eog_pairing']['sha256']:
             raise HTTPException(503,'真实EOG数据缺失或checksum不符')
         relative=f"{user['id']}/{row.id}-eog.npz"
         artifact_path(relative).write_bytes(eog_path.read_bytes())
         row.source={**row.source,'eog_path':relative,'eog_sha256':sha(eog_path),
                     'eog_source':manifest['eog_pairing'],
-                    'eog_sequence':True,'eog_prefiltered':True}
+                    'eog_sequence':manifest['eog_pairing'].get('sequence',True),
+                    'eog_prefiltered':manifest['eog_pairing'].get('prefiltered',True),
+                    'eog_starts':manifest['eog_pairing'].get('sample_starts',[])}
     db.add(row)
     record_audit(db,user['id'],'experiment_created',experiment_id=row.id)
     db.commit()
@@ -311,23 +342,26 @@ def save_experiment(db,subject,user,x,source,y=None):
 
 
 @router.post('/subjects/{subject_id}/experiments/demo')
-async def demo_experiment(subject_id:str,user=Depends(require('admin','researcher','guest'))):
+async def demo_experiment(subject_id:str,source_id:str='a01-3ch',user=Depends(require('admin','researcher','guest'))):
     with Session() as db:
         subject=own(db.get(Subject,subject_id),user)
         if not subject.is_demo:
             raise HTTPException(422,'请选择Demo用户')
-        x,source=demo('evaluation')
+        x,source=load_source(source_id,'evaluation')
         return save_experiment(db,subject,user,x,source)
 
 
 @router.post('/subjects/{subject_id}/experiments/upload')
-async def upload_experiment(subject_id:str,file:UploadFile=File(...),user=Depends(require('admin','researcher'))):
+async def upload_experiment(subject_id:str,file:UploadFile=File(...),source_id:str=Form('default',min_length=1,max_length=80),user=Depends(require('admin','researcher'))):
+    if not source_id.strip():
+        raise HTTPException(422,'采集来源标识不能为空')
     batch,checksum=await upload_batch(file)
     with Session() as db:
         subject=own(db.get(Subject,subject_id),user)
         if subject.is_demo:
             raise HTTPException(422,'上传数据请选择私有研究用户；Demo只使用内置公开数据')
         return save_experiment(db,subject,user,batch.x,{'dataset':'USER_UPLOAD','upload_sha256':checksum,
+            'source_id':f'upload:{subject.id}:{source_id.strip()}',
             'split':'evaluation','labels_present':batch.y is not None,'protocol':'Unverified provenance; no independent accuracy claim'},batch.y)
 
 
@@ -351,8 +385,7 @@ async def new_session(body:NewSession,user=Depends(require('admin','researcher',
     with Session() as db:
         profile=own(db.get(Profile,body.profile_id),user)
         exp=own(db.get(Experiment,body.experiment_id),user)
-        if profile.status!='READY' or profile.user_id!=exp.subject_id:
-            raise HTTPException(422,'Profile不可用或用户不匹配')
+        check_pair(profile,exp)
         channels=len(profile.channel_layout)
         trained=profile.source.get('classifier_retrained',False)
         if profile.source.get('pipeline_version')!=PIPELINE_VERSION:
@@ -378,14 +411,8 @@ async def new_session(body:NewSession,user=Depends(require('admin','researcher',
             raise HTTPException(422,'校准与回放通道布局不一致')
         if set(profile.source['trial_hashes']) & {fingerprint(t) for t in x}:
             raise HTTPException(422,'校准与Evaluation存在重复trial，拒绝数据泄漏')
-        if len(runtime.live)>=100:
+        if len(runtime.live)>=100 and not any(r.owner==user['id'] for r in runtime.live.values()):
             raise HTTPException(503,'会话容量已满，请关闭旧会话')
-        for old in list(runtime.live.values()):
-            if old.owner==user['id']:
-                runtime.stop_all(db,old,'NEW_SESSION')
-                old.running=False
-                db.get(InferenceSession,old.id).status='CLOSED'
-                runtime.live.pop(old.id,None)
         row=InferenceSession(id=uid(),owner_id=user['id'],profile_id=profile.id,experiment_id=exp.id)
         db.add(row)
         db.flush()
@@ -415,11 +442,20 @@ async def new_session(body:NewSession,user=Depends(require('admin','researcher',
             db.add(device)
             if kind=='wheelchair':
                 replay.selected_device=device.id
-        runtime.live[row.id]=replay
+        # Validate the new input completely before retiring the current working session.
+        for old in list(runtime.live.values()):
+            if old.owner==user['id']:
+                old.generation+=1
+                runtime.stop_all(db,old,'NEW_SESSION')
+                old.running=False
+                db.get(InferenceSession,old.id).status='CLOSED'
+                runtime.live.pop(old.id,None)
         record_audit(db,user['id'],'session_created',session_id=row.id,profile_id=profile.id)
         db.commit()
+        runtime.live[row.id]=replay
         return {'id':row.id,'profile_id':profile.id,'model_version':profile.model_version,'sampling_rate':250,
-                'trial_count':len(x),'speed':body.speed,'device_mode':'SIMULATED','eog_mode':'REAL_MODEL',
+                'trial_count':len(x),'speed':body.speed,'device_mode':'SIMULATED',
+                'source_id':exp.source.get('source_id'), 'eog_mode':'REAL_MODEL' if replay.eog_data is not None else 'MISSING',
                 'safety':{'threshold':replay.controller.threshold,'stable_required':replay.controller.stable_required}}
 
 
@@ -456,10 +492,17 @@ async def session_stream(websocket: WebSocket, session_id: str):
         await websocket.close(code=4401)
         return
     await websocket.accept()
+    connected_replay=None
     try:
         while True:
+            user = user_from_token(websocket.cookies.get('bci_session', ''))
+            if user['role'] not in {'admin', 'researcher', 'guest'}:
+                raise HTTPException(403, '会话权限已撤销')
             with Session() as db:
                 replay = get_replay(db, session_id, user)
+                if connected_replay is None:
+                    connected_replay=replay
+                    replay.streams+=1
                 async with replay.lock:
                     payload = await runtime.tick(db, replay)
             await websocket.send_json(payload)
@@ -467,7 +510,22 @@ async def session_stream(websocket: WebSocket, session_id: str):
     except WebSocketDisconnect:
         return
     except HTTPException as exc:
-        await websocket.close(code=4404 if exc.status_code == 404 else 4409)
+        await websocket.close(code=4401 if exc.status_code == 401 else 4403 if exc.status_code == 403 else 4404 if exc.status_code == 404 else 4409)
+    finally:
+        if connected_replay is not None:
+            connected_replay.streams=max(0,connected_replay.streams-1)
+            if connected_replay.streams==0 and connected_replay.running:
+                connected_replay.generation+=1
+                connected_replay.accumulated+=time.monotonic()-connected_replay.started
+                connected_replay.running=False
+                connected_replay.controller.count=0
+                connected_replay.eog_provider=runtime.RealEOGProvider()
+                connected_replay.last={**connected_replay.last,'decision':'STOP','reason':'STREAM_DISCONNECTED'}
+                with Session() as db:
+                    runtime.stop_all(db,connected_replay,'STREAM_DISCONNECTED')
+                    db.get(InferenceSession,session_id).status='PAUSED'
+                    record_audit(db,user['id'],'stream_disconnected',session_id=session_id)
+                    db.commit()
 
 
 class Control(BaseModel):
@@ -495,7 +553,12 @@ async def control(session_id:str,body:Control,user=Depends(require('admin','rese
             runtime.stop_all(db,replay,body.action.upper())
             replay.controller.count=0
             replay.prediction_time=0
+            replay.eog_provider=runtime.RealEOGProvider()
+            replay.last={**replay.last,'decision':'STOP','reason':body.action.upper()}
             if body.action=='reset':
+                for device in db.scalars(select(Device).where(Device.session_id==session_id)):
+                    device.data={'mode':'SIMULATED','action':'STOP','x':0,'heading':0,
+                                 'position_x':0,'position_z':0,'angle':0,'call':'IDLE','light':False}
                 replay.cursor=0
                 replay.accumulated=0
                 replay.last={}
@@ -510,8 +573,9 @@ async def control(session_id:str,body:Control,user=Depends(require('admin','rese
         db.commit()
         if body.action=='close':
             runtime.live.pop(session_id,None)
+        current=runtime.snapshot(db,replay)
     return {'status':body.action,'safety':{'threshold':replay.controller.threshold,
-        'stable_required':replay.controller.stable_required}}
+        'stable_required':replay.controller.stable_required},'snapshot':current}
 
 
 @router.post('/sessions/{session_id}/emergency-stop')
@@ -519,12 +583,17 @@ async def emergency_stop(session_id:str,user=Depends(require('admin','researcher
     with Session() as db:
         replay=get_replay(db,session_id,user)
         replay.generation+=1
+        if replay.running:
+            replay.accumulated+=time.monotonic()-replay.started
         command=runtime.issue(db,replay,'EMERGENCY')
         command.data={**command.data,'source':'MANUAL_EMERGENCY'}
         replay.running=False
+        db.get(InferenceSession,session_id).status='PAUSED'
+        record_audit(db,user['id'],'manual_emergency_stop',session_id=session_id)
         runtime.advance_devices(db,replay)
         db.commit()
-        return {'mode':'MANUAL_STOP','decision':replay.last,'command':serialize(command)}
+        return {'mode':'MANUAL_STOP','decision':replay.last,'command':serialize(command),
+                'snapshot':runtime.snapshot(db,replay)}
 
 
 class DeviceConfig(BaseModel):
@@ -539,6 +608,13 @@ async def configure_device(session_id:str,device_id:str,body:DeviceConfig,user=D
         device=own(db.get(Device,device_id),user)
         if device.session_id!=session_id:
             raise HTTPException(404,'设备不属于该会话')
+        replay.generation+=1
+        if body.select_device and replay.selected_device!=device.id:
+            replay.controller.count=0
+        replay.eog_provider=runtime.RealEOGProvider()
+        if replay.controller.count>=replay.controller.stable_required and replay.last.get('confidence',0)>=replay.controller.threshold and replay.last.get('prediction',3)!=3:
+            replay.eog_provider.reset_candidate(replay.last['prediction'])
+        replay.last={**replay.last,'decision':'STOP','reason':'DEVICE_CONFIGURATION'}
         runtime.stop_all(db,replay,'DEVICE_CONFIGURATION')
         device.scenario=body.scenario
         device.state='OFFLINE' if body.scenario=='OFFLINE' else 'BUSY' if body.scenario=='BUSY' else 'ONLINE'
@@ -590,9 +666,16 @@ async def health_detail(user=Depends(require('admin'))):
 
 
 @router.get('/operations')
-async def operations(user=Depends(current_user)):
+async def operations(session_id:str|None=None,user=Depends(current_user)):
     with Session() as db:
-        result={}
+        result={'session_id':session_id}
+        if session_id:
+            row=db.get(InferenceSession,session_id)
+            if user['role']=='caregiver':
+                if not row or not db.get(Subject,db.get(Experiment,row.experiment_id).subject_id).is_demo:
+                    raise HTTPException(404,'记录不存在')
+            else:
+                own(row,user)
         for key,model in [('alerts',Alert),('audit_logs',Audit),('commands',Command),('devices',Device),('sessions',InferenceSession)]:
             query=select(model)
             if user['role']!='admin':
@@ -608,6 +691,13 @@ async def operations(user=Depends(current_user)):
                     query=query.where(model.owner_id==user['id'])
             if hasattr(model,'created_at'):
                 query=query.order_by(model.created_at.desc())
+            if session_id:
+                if model==InferenceSession:
+                    query=query.where(model.id==session_id)
+                elif model==Command:
+                    query=query.where(Command.device_id.in_(select(Device.id).where(Device.session_id==session_id)))
+                elif model!=Audit:
+                    query=query.where(model.session_id==session_id)
             rows=[serialize(row) for row in db.scalars(query.limit(100))]
             if model is Alert:
                 for item in rows:
@@ -704,8 +794,7 @@ async def evaluate_experiment(experiment_id:str,body:EvaluationRequest,user=Depe
     with Session() as db:
         exp=own(db.get(Experiment,experiment_id),user)
         profile=own(db.get(Profile,body.profile_id),user)
-        if exp.subject_id!=profile.user_id or profile.status!='READY':
-            raise HTTPException(422,'Profile不匹配')
+        check_pair(profile,exp)
         path=artifact_path(exp.artifact_path);ref_path=artifact_path(profile.artifact_path)
         if sha(path)!=exp.source['sha256'] or sha(ref_path)!=profile.artifact_sha256:
             raise HTTPException(409,'Checksum不匹配')
@@ -788,17 +877,25 @@ async def upload_eog_pair(experiment_id:str,file:UploadFile=File(...),prefiltere
         exp=own(db.get(Experiment,experiment_id),user)
         if db.get(Subject,exp.subject_id).is_demo:
             raise HTTPException(422,'不能覆盖内置公开Demo数据')
+        if any(r.owner==user['id'] and db.get(InferenceSession,r.id).experiment_id==exp.id for r in runtime.live.values()):
+            raise HTTPException(409,'请先关闭使用该实验的会话，再更新EOG数据')
         try:
             with zipfile.ZipFile(io.BytesIO(content)) as archive:
                 if len(archive.infolist())!=1 or archive.infolist()[0].filename!='X.npy' or archive.infolist()[0].file_size>64*1024*1024:
                     raise ValueError('Invalid archive')
             with np.load(io.BytesIO(content),allow_pickle=False) as payload:
-                x=np.asarray(payload['X'],dtype=np.float64)
+                original=payload['X']
+                if original.dtype.kind not in 'fiu':
+                    raise ValueError('EOG must be numeric')
+                x=np.asarray(original,dtype=np.float64)
             n=exp.source['samples']
             if x.shape not in {(n,501),(2*n,250)} or not np.isfinite(x).all():
                 raise ValueError('EOG shape mismatch')
+            windows=x if x.shape[1]==250 else np.concatenate([x[:,offset:offset+250] for offset in (0,125,250)])
+            if np.any(np.std(windows,axis=1)<1e-8):
+                raise ValueError('Constant EOG window')
         except (ValueError,KeyError,OSError,zipfile.BadZipFile) as exc:
-            raise HTTPException(422,'EOG X须为(N,501)同步窗口或(2N,250)片段序列，250Hz/μV且全部有限') from exc
+            raise HTTPException(422,'EOG X须为数值(N,501)同步窗口或(2N,250)片段序列，250Hz/μV、全部有限且窗口非恒定') from exc
         relative=f"{user['id']}/{uid()}-eog.npz"
         path=artifact_path(relative);path.parent.mkdir(parents=True,exist_ok=True)
         np.savez_compressed(path,X=x)

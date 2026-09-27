@@ -56,6 +56,7 @@ runtime/gdf-env/Scripts/python scripts/prepare_demo.py
 python -m venv runtime/eog-env
 runtime/eog-env/Scripts/python -m pip install -r backend/requirements-eog.txt
 backend/.venv/Scripts/python scripts/prepare_eog_demo.py
+runtime/gdf-env/Scripts/python scripts/prepare_sources.py
 cd frontend
 npm ci
 npm run lint
@@ -69,6 +70,14 @@ backend/.venv/Scripts/python scripts/preview.py
 开发热更新可在frontend运行npm run dev；跨端口开发显式配置 `NEXT_PUBLIC_API_BASE_URL=http://localhost:8000`，生产留空走同源 `/api`。`scripts/preview.py`仅本地使用。
 
 ## 可重复Demo
+
+控制工作台新增与当前会话实时对应的3D轮椅、护理床、紧急呼叫和智能家居。先选择目标，再在3D区域直接开始/暂停回放。画面读取后端成功ACK后的姿态，不用动画计时伪造动作；人工急停立即锁定，重置回放同时恢复初始姿态，重置视角只改变观察方式。
+
+页面右下角的BCI智答使用公开项目知识检索与后端配置的deepseek-v4.1-flash，回答附资料章节。模型端点、API key仅在服务器环境中设置；问答不会发送原始EEG或用户档案，不具备设备控制能力。生产环境所有已登录角色可使用智答；并发限制为2，不排无限队列。知识索引只读取docs/rag目录，运维文档不参与检索。
+
+工作台按“用户和来源 → 个体化校准 → 同源数据 → 实时模拟”依次解锁。服务器提供 A01/A02 的3通道和22通道四套来源，缺失数据会禁用对应选项。A01 3ch用于双眨眼闭环展示；A02使用同一GDF的同步EOG，不保证触发确认。选择某一来源后，校准和回放自动沿用该来源，服务端拒绝不同来源/用户/通道混用。
+
+私有研究用户可上传符合工作台格式说明的校准 EEG，再上传本人同源的独立回放 EEG，并配对 EOG。无标签校准执行EA，有标签且每类≥10条会训练并保存个人CSP/LDA模型。缺少EOG仅观察EEG推理，设备保持STOP。工作台实时显示模型状态、稳定窗、概率、计算耗时、人工急停及设备回执；命令和告警限定当前会话。详细上传协议见 [数据协议](docs/data-protocol.md)。
 
 1. 在登录旁查看演示访客账号密码，登录后创建/选择演示用户。
 2. 开始个体化校准，确认40条、3ch、EA reference与模型checksum。
@@ -101,7 +110,7 @@ backend/.venv/Scripts/python scripts/benchmark_bci.py
 
 `/api/v1/health/live`（匿名状态）；`/api/v1/health/detail`（仅管理员）；`/auth/login|me|logout`；`/users`；`/subjects`；`/sessions/{id}/stream`（WebSocket 推送）；`/sessions/{id}/control|emergency-stop`；`/operations`；`/alerts/{id}/ack`；`/configuration`。
 
-实时会话经受 Cookie 认证的 WebSocket 由服务端推送脑电块、预测、眼电事件与设备状态；反向代理配置了连接升级和长连接超时。旧批量 analyze/demo 和 RAG 接口仅管理员/研究人员在生产可访问，不控制设备。RAG为可选旧功能，当前不在控制UI启用，未配置第三方密钥也可完整演示。
+实时会话经受 Cookie 认证的 WebSocket 由服务端推送脑电块、预测、眼电事件与设备状态；反向代理配置了连接升级和长连接超时。旧批量 analyze/demo 仅管理员/研究人员在生产可访问。项目RAG问答允许全部已登录角色，不控制设备；第三方模型故障不影响EEG/EOG控制闭环。
 
 ## 目录与真实 EOG 数据
 

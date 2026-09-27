@@ -7,7 +7,7 @@ import mne
 import numpy as np
 
 
-def extract(path, count):
+def extract(path, count, channels=3):
     raw = mne.io.read_raw_gdf(path, preload=True, verbose='ERROR')
     if raw.info['sfreq'] != 250 or len(raw.ch_names) != 25:
         raise ValueError('Expected 250Hz, 22 EEG + 3 EOG')
@@ -30,8 +30,8 @@ def extract(path, count):
         if any(start <= r < stop for r in rejects):
             continue
         a, b = cue + 125, cue + 626
-        x = data[[7, 9, 11], a:b]
-        if x.shape != (3, 501) or not np.isfinite(x).all():
+        x = data[[7, 9, 11] if channels == 3 else list(range(22)), a:b]
+        if x.shape != (channels, 501) or not np.isfinite(x).all():
             continue
         trials.append(x)
         metadata.append({'trial_index_zero_based': trial_id, 'cue_sample': cue,
@@ -41,7 +41,7 @@ def extract(path, count):
     if len(trials) != count:
         raise ValueError('Insufficient clean trials')
     return np.asarray(trials), {'file': path.name, 'sha256': hashlib.sha256(path.read_bytes()).hexdigest(),
-                               'trials': metadata, 'channels': ['C3','Cz','C4'], 'sampling_rate': 250,
+                               'trials': metadata, 'channels': ['C3','Cz','C4'] if channels == 3 else raw.ch_names[:22], 'sampling_rate': 250,
                                'unit': 'uV', 'epoch': 'cue+0.5s through cue+2.5s inclusive'}
 
 

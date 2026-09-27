@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+import math
 from typing import Protocol
 
 
@@ -61,6 +62,10 @@ class SimulatorAdapter:
             if self.kind == "wheelchair":
                 result["x"] = result.get("x", 0) + (1 if action == "FORWARD" else 0)
                 result["heading"] = result.get("heading", 0) + (-30 if action == "LEFT" else 30 if action == "RIGHT" else 0)
+                if action == "FORWARD":
+                    yaw = math.radians(result["heading"])
+                    result["position_x"] = result.get("position_x", 0) + math.sin(yaw) * .8
+                    result["position_z"] = result.get("position_z", 0) - math.cos(yaw) * .8
             elif self.kind == "care_bed":
                 result["angle"] = max(0, min(60, result.get("angle", 0) + (-5 if action == "LEFT" else 5)))
             elif self.kind == "emergency_call":

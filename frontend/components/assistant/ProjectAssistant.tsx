@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { usePathname } from "next/navigation";
-import { api } from "@/lib/api";
+import { api, ApiError } from "@/lib/api";
 import type { AssistantSource } from "@/lib/types";
 
 type AssistantState = "closed" | "open" | "minimized" | "hidden";
@@ -22,8 +22,9 @@ const QUICK_QUESTIONS = [
   "项目解决什么问题？",
   "四分类意图是什么？",
   "FBCSP 如何识别脑电？",
-  "在线实验平台怎么使用？",
-  "3D 数字孪生展示了什么？",
+  "如何完成校准和同源数据回放？",
+  "EEG、EOG和人工急停如何配合？",
+  "3D 模拟设备如何工作？",
 ];
 
 function BrainwaveIcon({ className = "h-7 w-7" }: { className?: string }) {
@@ -61,6 +62,7 @@ export default function ProjectAssistant() {
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
   const nextId = useRef(2);
+  const sendLock = useRef(false);
   const messageEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
@@ -89,7 +91,8 @@ export default function ProjectAssistant() {
 
   const sendQuestion = async (rawQuestion?: string) => {
     const question = (rawQuestion ?? input).trim();
-    if (!question || sending || question.length > 500) return;
+    if (!question || sendLock.current || question.length > 500) return;
+    sendLock.current = true;
 
     const userMessage: ChatMessage = {
       id: nextId.current++,
@@ -111,17 +114,20 @@ export default function ProjectAssistant() {
           sources: response.sources,
         },
       ]);
-    } catch {
+    } catch (error) {
       setMessages((current) => [
         ...current,
         {
           id: nextId.current++,
           role: "assistant",
-          content: "项目知识服务暂时不可用，请稍后再试。",
+          content: error instanceof ApiError && error.status === 401
+            ? "请先进入控制工作台登录，再使用项目智答。"
+            : error instanceof ApiError ? error.message : "项目知识服务暂时不可用，请稍后再试。",
           error: true,
         },
       ]);
     } finally {
+      sendLock.current = false;
       setSending(false);
       window.setTimeout(() => textareaRef.current?.focus(), 0);
     }
@@ -311,7 +317,7 @@ export default function ProjectAssistant() {
             value={input}
             onChange={(event) => setInput(event.target.value)}
             onKeyDown={(event) => {
-              if (event.key === "Enter" && !event.shiftKey) {
+              if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
                 event.preventDefault();
                 void sendQuestion();
               }
@@ -335,7 +341,7 @@ export default function ProjectAssistant() {
             </button>
           </div>
         </div>
-        <p className="mt-2 text-center text-[10px] text-slate-600">回答依据项目资料 · 科研原型，非医疗建议</p>
+        <p className="mt-2 text-center text-[10px] text-slate-500">问题与公开知识将发送至模型服务 · 智答不能操作设备</p>
       </div>
     </section>
   );

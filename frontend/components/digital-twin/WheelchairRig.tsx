@@ -268,6 +268,18 @@ export default function WheelchairRig({
 
   return (
     <group ref={rigRef} name="wheelchair-patient-rig" position={[BASE_X, 0, 0]}>
+      <WheelchairGeometry phase={phase} reducedMotion={reducedMotion} commandId={commandId} leftWheelRef={leftWheelRef} rightWheelRef={rightWheelRef} />
+    </group>
+  );
+}
+
+// Reused by the live workbench; geometry has no demo timeline or control authority.
+export function WheelchairGeometry({phase, reducedMotion, commandId, leftWheelRef, rightWheelRef, showLabel=true}: {
+  phase: DemoPhase; reducedMotion: boolean; commandId: CommandId | undefined;
+  showLabel?: boolean;
+  leftWheelRef?: React.Ref<THREE.Mesh>; rightWheelRef?: React.Ref<THREE.Mesh>;
+}) {
+  return <group>
       <Wheelchair phase={phase} commandId={commandId} />
       <group position={[-0.94, 0.62, 0.12]}>
         <group rotation={[0, 0, Math.PI / 2]}>
@@ -302,13 +314,12 @@ export default function WheelchairRig({
         </group>
       ))}
       <SeatedPatient phase={phase} reducedMotion={reducedMotion} />
-      {phase !== "acquiring" ? (
+      {showLabel && phase !== "acquiring" ? (
         <Html center position={[0, 3.62, 0.35]}>
           <span className="pointer-events-none whitespace-nowrap rounded-full border border-cyan-400/20 bg-slate-950/82 px-2.5 py-1 text-[9px] font-medium tracking-[0.08em] text-cyan-100/85">
             患者 · BCI 电动轮椅
           </span>
         </Html>
       ) : null}
-    </group>
-  );
+    </group>;
 }
