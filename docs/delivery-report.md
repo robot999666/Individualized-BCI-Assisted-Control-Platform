@@ -9,7 +9,7 @@
 - 运行中心：<https://152.136.191.171:9443/operations/>
 - API：<https://152.136.191.171:9443/api/v1>
 - TLS 使用 Let's Encrypt 公网 IP 证书，Secure Cookie 已启用。专用 HTTPS 端口为9443，Nginx不监听443；80只用于ACME验证及跳转。
-- 服务器本机HTTPS和证书链验证正常。外网9443连接当前超时，需在腾讯云安全组对该实例增加入站TCP 9443规则后公网访问才会生效；腾讯云控制台当前未登录，未修改安全组。公开科研Demo，不接收真实患者敏感数据。
+- 服务器本机及公网HTTPS和证书链验证正常。Lighthouse 实例 `lhins-43xl57eo`（北京）防火墙已放行入站 TCP 9443，外网健康接口与完整闭环验收通过。公开科研Demo，不接收真实患者敏感数据。
 - 四角色：demo_admin、demo_researcher、demo_caregiver、demo_guest。
 - 密码仅在本机忽略文件 `runtime/production-accounts.json` 与服务器root专用600权限文件中；此报告不包含密码。该文件已通过SSH私下交付至本机。
 
@@ -55,7 +55,7 @@ EOG环境 `/opt/als-bci/eog-venv`：NumPy2.2.6 / SciPy1.15.3 / sklearn1.9.1 / MN
 | mysql.service | 127.0.0.1:3306 / 33060 | active、enabled |
 | ssh.service | :22 | 可用 |
 
-UFW active，incoming默认deny；保留原有22/80/443规则，并仅为本项目新增9443。安全组需同步放行TCP 9443；没有停止或覆盖服务器上的其他服务。FastAPI、MySQL仍只绑定127.0.0.1。Certbot 5.8.0公网IP短期证书到期前自动续期，systemd定时器每6小时检查并部署后重载Nginx；`certbot renew --dry-run --run-deploy-hooks` 已模拟成功。Snap自带重复定时器已关闭，避免与项目定时器并行续期。
+UFW active，incoming默认deny；保留原有22/80/443规则，并仅为本项目新增9443。Lighthouse 实例防火墙已允许入站 TCP 9443；没有停止或覆盖服务器上的其他服务。FastAPI、MySQL仍只绑定127.0.0.1。Certbot 5.8.0公网IP短期证书到期前自动续期，systemd定时器每6小时检查并部署后重载Nginx；`certbot renew --dry-run --run-deploy-hooks` 已模拟成功。Snap自带重复定时器已关闭，避免与项目定时器并行续期。
 
 ## 验证结果
 
@@ -64,7 +64,7 @@ UFW active，incoming默认deny；保留原有22/80/443规则，并仅为本项�
 
 S3软件回归再次确认：3ch63.5417%、22ch82.9861%，288条，重复概率逐值一致；最近本机批量计算约76.9ms/449.3ms。S3参与训练，此数据不是独立泛化或临床指标。71.3%、53.6%、60.4%、99.95%均未用于正式性能宣传。
 
-生产HTTPS闭环验收通过（服务器本机回环访问）：四角色登录和RBAC、Secure Cookie、MySQL/模型/文件健康、40条校准、真实EEG预测、真实EOG自动确认、SIMULATED ACK、DEVICE_OFFLINE拒绝、照护角色告警确认、审计记录、急停锁定及拒绝重放。告警确认写入处理人、处理时间和处理结果，本次端到端响应时间为0.098秒。公开存活接口返回最小状态，管理员详情接口可读取内部健康信息。会话数据通过WebSocket推送，推理在线程中运行并由Semaphore限制并发。外网验收待安全组开放9443后复测。
+生产HTTPS公网闭环验收通过：四角色登录和RBAC、Secure Cookie、MySQL/模型/文件健康、40条校准、真实EEG预测、真实EOG自动确认、SIMULATED ACK、DEVICE_OFFLINE拒绝、照护角色告警确认、审计记录、急停锁定及拒绝重放。告警确认写入处理人、处理时间和处理结果；本次公网端到端响应时间为0.270秒。公开存活接口返回最小状态，管理员详情接口可读取内部健康信息。会话数据通过WebSocket推送，推理在线程中运行并由Semaphore限制并发。
 前三EEG窗实际端到端计算为6.918 / 4.949 / 4.654ms；预处理2.194 / 2.292 / 2.143ms；模型推理0.246 / 0.261 / 0.255ms。计时使用perf_counter，不含采样等待、网络和最终DB提交，不作硬件性能承诺。
 
 服务器已实际重启，boot_id从84c27140-7f03-4579-96ca-dcb7e226bcc6变为baf22ef5-1439-437b-a6cc-a834dc43bf5a；三服务自动恢复、health=ok、保存Profile重载通过；旧运动会话不自动恢复。
@@ -74,7 +74,7 @@ S3软件回归再次确认：3ch63.5417%、22ch82.9861%，288条，重复概率�
 ## Git与发布
 
 仓库：https://github.com/robot999666/als-bci-web，分支main。
-项目说明和部署口径已同步至GitHub `main`；生产代码发布版本为`3695446a127bca8d967cd54d6b9ac04504c61e9b`，记录于 `/opt/als-bci/current/RELEASE_COMMIT`。公网安全组规则尚未添加，外网验收因此待完成。
+项目说明和部署口径已同步至GitHub `main`；生产代码发布版本为`3695446a127bca8d967cd54d6b9ac04504c61e9b`，记录于 `/opt/als-bci/current/RELEASE_COMMIT`。轻量应用服务器实例防火墙已添加 9443 规则，公网验收完成。
 发布包基于Git已提交文件和本地静态构建，排除temp/runtime/.env/.pem/完整EOG缓存/原始GDF。用户产物与代码目录分离。
 
 ## 运维与排障
@@ -94,7 +94,7 @@ sudo ss -lntp
 sudo ufw status
 ```
 
-公网网站打不开先查腾讯云安全组 TCP 9443，再查Nginx监听、UFW和静态资源；502查后端启动及loopback8000；FastAPI起不来查env、WorkingDirectory、迁移、Python与EOG环境；模型失败查checksum/依赖和EOG_PYTHON；MySQL失败查本地服务、账号和DATABASE_URL；校准失败查NPZ维度/250Hz/μV/非有限值/样本量/写权限；断流查WebSocket、Secure Cookie、Origin和会话状态；设备离线在模拟器切换ACK并查告警，急停需显式重置；磁盘满查df与产物保留策略；内存高查会话数量、文件大小与进程RSS。完整说明见operations.md。
+公网网站打不开先查轻量应用服务器实例防火墙 TCP 9443，再查Nginx监听、UFW和静态资源；502查后端启动及loopback8000；FastAPI起不来查env、WorkingDirectory、迁移、Python与EOG环境；模型失败查checksum/依赖和EOG_PYTHON；MySQL失败查本地服务、账号和DATABASE_URL；校准失败查NPZ维度/250Hz/μV/非有限值/样本量/写权限；断流查WebSocket、Secure Cookie、Origin和会话状态；设备离线在模拟器切换ACK并查告警，急停需显式重置；磁盘满查df与产物保留策略；内存高查会话数量、文件大小与进程RSS。完整说明见operations.md。
 
 ## 项目边界
 

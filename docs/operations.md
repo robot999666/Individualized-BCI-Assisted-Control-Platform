@@ -1,6 +1,6 @@
 # 生产部署与运维
 
-入口：https://152.136.191.171:9443/。服务器和 UFW 已启用 HTTPS；公网访问还需腾讯云安全组允许入站 TCP 9443。HTTP `:80` 用于 Let's Encrypt IP 证书验证和跳转，应用 TLS 在专用 `:9443` 终止，不占用共享 `:443`。公网 HTTPS Cookie 设置 `SECURE_COOKIE=true`。证书约6天有效，由 systemd 定时器每6小时检查续期并在续期后重载 Nginx。
+入口：https://152.136.191.171:9443/。Lighthouse 实例防火墙和 UFW 已允许入站 TCP 9443，公网访问已验收。HTTP `:80` 用于 Let's Encrypt IP 证书验证和跳转，应用 TLS 在专用 `:9443` 终止，不占用共享 `:443`。公网 HTTPS Cookie 设置 `SECURE_COOKIE=true`。证书约6天有效，由 systemd 定时器每6小时检查续期并在续期后重载 Nginx。
 
 ## 目录与环境
 
@@ -28,7 +28,7 @@
 | mysql.service | 127.0.0.1:3306（X插件33060也为loopback） | MySQL8，开机启动 |
 | ssh.service | :22 | 运维 |
 
-公网入口需要 80（证书 HTTP-01 验证及跳转）与 9443（HTTPS 站点）；保留既有 22、80、443 云端和 UFW 规则，不改写其他项目端口。部署只为 9443 添加 UFW 规则。腾讯云安全组需允许 TCP 9443；FastAPI 8000 与 MySQL 3306/33060 继续只监听回环地址。
+公网入口需要 80（证书 HTTP-01 验证及跳转）与 9443（HTTPS 站点）；保留既有 22、80、443 云端和 UFW 规则，不改写其他项目端口。部署只为 9443 添加 UFW 规则，Lighthouse 实例防火墙也需允许 TCP 9443。FastAPI 8000 与 MySQL 3306/33060 继续只监听回环地址。当前 Lighthouse 实例防火墙规则已配置并验收。
 
 ```bash
 sudo systemctl start als-bci nginx mysql
@@ -55,7 +55,7 @@ sudo ufw status
 
 | 现象 | 排查与处理 |
 |---|---|
-| 公网网站打不开 | 先查腾讯云安全组入站 TCP 9443，再查 UFW、Nginx监听和静态out；服务器本机可用 `curl -fsS https://152.136.191.171:9443/api/v1/health/live` 验证 |
+| 公网网站打不开 | 先查 Lighthouse 实例防火墙入站 TCP 9443，再查 UFW、Nginx监听和静态out；服务器本机可用 `curl -fsS https://152.136.191.171:9443/api/v1/health/live` 验证 |
 | Nginx 502 | 查als-bci与127.0.0.1:8000；journalctl；不要把8000开放公网 |
 | FastAPI起不来 | 查env权限/格式、Python依赖、数据库迁移与WorkingDirectory；单worker |
 | model load failed | 查两个模型SHA256、文件权限、NumPy2.2.6/SciPy1.15.3/sklearn1.6.1/MNE1.9.0；不能回退Mock |

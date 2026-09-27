@@ -95,7 +95,7 @@ backend/.venv/Scripts/python -m pytest backend/tests -q
 backend/.venv/Scripts/python scripts/benchmark_bci.py
 ```
 
-生产使用本地已验证静态构建 + Nginx + systemd + MySQL；不依赖SSH终端，不需要生产Node进程。服务器 HTTPS 入口为 `https://152.136.191.171:9443`；服务器和 UFW 已配置，但公网访问需腾讯云安全组先放行入站 TCP 9443。HTTP 80 仅承载 IP 证书验证和 HTTPS 跳转，443 留给服务器其他项目。Let's Encrypt 短期 IP 证书由每6小时检查的定时器自动续期。见 [部署与故障排查](docs/operations.md)。`deploy/install.sh`只安装已上传的已验证release，`.env`位于/etc、模型在代码目录、数据在/var/lib，避免代码更新覆盖用户产物。
+生产使用本地已验证静态构建 + Nginx + systemd + MySQL；不依赖SSH终端，不需要生产Node进程。公网 HTTPS 入口为 `https://152.136.191.171:9443`，Lighthouse 实例防火墙已放行 TCP 9443。HTTP 80 仅承载 IP 证书验证和 HTTPS 跳转，443 留给服务器其他项目。Let's Encrypt 短期 IP 证书由每6小时检查的定时器自动续期。见 [部署与故障排查](docs/operations.md)。`deploy/install.sh`只安装已上传的已验证release，`.env`位于/etc、模型在代码目录、数据在/var/lib，避免代码更新覆盖用户产物。
 
 ## 核心API
 
