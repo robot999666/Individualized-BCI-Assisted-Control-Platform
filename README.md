@@ -10,7 +10,7 @@
 - **REAL**：两套原有真实模型（3ch / 22ch）、SHA256校验、EA校准、窗口推理、MySQL元数据、Argon2密码、服务端Session、四角色RBAC、安全逻辑、API/进程指标与审计。
 - **REAL MODEL**：已接入交付的 EOG SVM 眨眼模型，以真实 EOG 窗口检测、自动双眨眼确认；没有手动 Mock 确认接口。EEG 与 EOG 分别运行在 sklearn 1.6.1 / 1.9.1 环境，加载时校验 SHA256。
 - **SIMULATED**：轮椅、护理床、紧急呼叫、智能家居；ACK、延迟、丢包、离线、超时、失败及BUSY。设备延迟和执行状态不是实体设备测量。
-- **未实现**：真实EEG/EOG采集、硬件Adapter、ALS临床评估。HTTP IP站点不是医疗级安全系统，限公开科研Demo，真实敏感数据需先完成HTTPS和独立安全评估。
+- **未实现**：真实EEG/EOG采集、硬件适配、ALS临床评估。公网入口使用独立 HTTPS 端口和加密会话，限公开科研演示，真实敏感数据仍需独立安全评估。
 
 首页 `/`，工作台 `/lab/`，运行中心 `/operations/`。生理数据尽可能本地/端侧处理是设计目标；本部署上传数据在服务器执行计算。代码不把原始EEG发送第三方模型。
 
@@ -84,7 +84,7 @@ backend/.venv/Scripts/python scripts/preview.py
 ## 安全与运维
 
 - 密码Argon2id；随机不透明Session令牌只以SHA256保存到数据库；HTTPS 下使用 Secure、HttpOnly、SameSite=Strict Cookie，8小时有效，停用/权限变更撤销会话。
-- 写请求校验Origin；生产要求X-BCI-Request头；登录/API速率限制；生产关闭/docs、/redoc、/openapi.json。接HTTPS后开启SECURE_COOKIE。
+- 写请求校验Origin；生产要求X-BCI-Request头；登录/API速率限制；生产关闭/docs、/redoc、/openapi.json。生产环境 `SECURE_COOKIE=true`。
 - 上传限制20MiB，NPZ解压64MiB；类型、shape、有限值、标签、路径检查，禁止用户pickle；artifact以随机ID按账号目录隔离。
 - 安全默认停止：低置信度、预测不稳定、无确认、设备离线/忙碌/故障、过期或异常；单次确认绑定窗口且不能重放；运动许可3秒到期停止；客户端6秒无活动自动暂停，重启不自动恢复运动。
 - 单worker拥有回放时钟和模拟器；当前不支持横向多worker共享实时会话。关闭会话释放内存；持久记录保留。日志仅元数据，不记录EEG/密码/令牌。
