@@ -52,6 +52,12 @@ sudo ufw status
 
 更新：本地测试/构建 → Git commit/push → 上传白名单release → 维护窗口停止als-bci → 备份MySQL与artifacts → 更新代码 → 读取生产环境后Alembic upgrade head → 重启服务 → 验收。保留旧release可回退；不要覆盖数据目录。当前部署不是高可用集群。
 
+`scripts/package_release.py`从已提交的HEAD与已验证的frontend/out制作发布包，并单独打包四套最小演示数据。环境配置单独经SSH传输、合并到`/etc/als-bci.env`，不放进代码包。智答配置为`OPENAI_BASE_URL`、`OPENAI_API_KEY`、`OPENAI_MODEL`，当前模型为deepseek-v4.1-flash；生产所有已登录角色可使用项目智答，匿名仅能看health。
+
+安装依赖时使用umask 022，确保服务账号可读取site-packages；切换前执行`runuser -u als-bci -- /opt/als-bci/venv/bin/python -c 'import websockets.legacy.handshake'`。私有环境和备份仍保持root 600/700。健康检查失败则恢复旧release链接与旧环境并重启，不自动覆盖数据库。完整公网验收使用`verify_deployment.py`和root私有账号文件，包含四角色、来源就绪、RAG真实调用、真实EEG/EOG闭环、模拟ACK、离线保护、告警处理、急停和重置。
+
+2026-09-27已发布工作台、四来源、实时3D与智答版本，功能提交`4e6422d77fe692d36d716f5d9adc138f92acc9b3`。目录`/opt/als-bci/releases/4e6422d`，原版本`/opt/als-bci/releases/3695446`保留；升级前备份`/var/backups/als-bci/20260927T074253Z-4e6422d`。数据库及用户文件已备份，升级前后已有用户/校准/实验记录数量一致。API与公网浏览器验收通过，详见[公网验收记录](production-release-verification.md)。
+
 ## 故障排查
 
 | 现象 | 排查与处理 |
