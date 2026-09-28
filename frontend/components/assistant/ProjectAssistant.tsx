@@ -16,7 +16,7 @@ interface ChatMessage {
 }
 
 const WELCOME =
-  "你好，我可以帮你了解 ALS-BCI 项目的研究背景、技术路线、实验平台和系统能力。";
+  "你好，我可以帮你了解 个体化脑机辅助控制平台的研究背景、技术路线、实验平台和系统能力。";
 
 const QUICK_QUESTIONS = [
   "项目解决什么问题？",

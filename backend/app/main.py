@@ -124,7 +124,7 @@ app.include_router(api_router, prefix=settings.api_prefix)
 @app.get("/")
 def root() -> dict[str, str]:
     return {
-        "message": "ALS-BCI 四分类冷启动 API",
+        "message": "个体化脑机辅助控制平台 API",
         "docs": "/docs",
         "health": f"{settings.api_prefix}/health",
     }

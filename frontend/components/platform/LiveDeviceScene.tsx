@@ -85,7 +85,7 @@ export default function LiveDeviceScene({tick}:{tick:Tick|null}) {
   const reduced=useSyncExternalStore(subscribeMotion,()=>window.matchMedia("(prefers-reduced-motion: reduce)").matches,()=>true);
   const find=(kind:string)=>tick?.devices.find(d=>d.kind===kind);
   const selected=(kind:string)=>find(kind)?.id===tick?.selected_device&&Boolean(tick);
-  return <Canvas shadows frameloop={tick?.running?"always":"demand"} camera={{position:[3,7,12],fov:43}} dpr={[1,1.5]} gl={{antialias:true}} aria-label="由当前会话真实回执驱动的四设备3D仿真" fallback={<p>当前浏览器不支持3D画面，请使用下方设备卡片。</p>}>
+  return <Canvas shadows frameloop={tick?.running?"always":"demand"} camera={{position:[3,7,12],fov:43}} dpr={[1,1.5]} gl={{antialias:true}} aria-label="由当前会话执行回执驱动的四设备 3D 仿真" fallback={<p>当前浏览器不支持3D画面，请使用下方设备卡片。</p>}>
     <color attach="background" args={["#07111f"]}/>
     <ambientLight intensity={1.1}/><directionalLight position={[5,10,7]} intensity={2} castShadow shadow-mapSize={[1024,1024]}/>
     <directionalLight position={[-6,5,4]} intensity={1.5} color="#c7efff"/>

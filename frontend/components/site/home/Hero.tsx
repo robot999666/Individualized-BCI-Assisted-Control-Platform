@@ -19,7 +19,7 @@ export default function Hero() {
             中国国际大学生创新大赛项目
           </p>
           <h1 className="mt-7 text-[38px] font-black leading-[1.12] tracking-tight text-white sm:text-5xl lg:text-[62px]">
-            <span className="block text-cyan-300">ALS-BCI</span>
+            <span className="block text-cyan-300">个体化脑机辅助控制平台</span>
             <span className="block sm:inline">脑机接口</span>
             <span className="block sm:inline">意图识别平台</span>
           </h1>

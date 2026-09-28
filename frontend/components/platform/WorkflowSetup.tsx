@@ -37,11 +37,11 @@ export function WorkflowSetup(p:Props){
           <button className="secondary" disabled={locked||!name.trim()}>＋ 创建并选择用户</button>
         </form>
         {subject?.is_demo&&<><label>内置数据来源<select value={p.source} disabled={locked} onChange={e=>p.selectSource(e.target.value)}>{p.sources.map(s=><option key={s.id} value={s.id} disabled={!s.available}>{s.name}{!s.available?" · 未准备":""}</option>)}</select></label><p className="small muted">{source?.calibration_trials||"—"} 条 T 会话校准 → {source?.evaluation_trials||"—"} 条 E 会话回放 · {source?.channels||"—"} 通道。后续实验自动沿用此来源。</p></>}
-        {subject&&!subject.is_demo&&<><label>采集来源标识<input value={p.uploadSource} maxLength={80} disabled={locked||!!profile} onChange={e=>p.setUploadSource(e.target.value)} placeholder="例如：participant-01-device-a"/></label><p className="small muted">校准和回放均归属当前用户及此来源。请选择同一人的采集数据；平台校验声明和文件，不验证上传者身份。</p></>}
+        {subject&&!subject.is_demo&&<><label>采集来源标识<input value={p.uploadSource} maxLength={80} disabled={locked||!!profile} onChange={e=>p.setUploadSource(e.target.value)} placeholder="例如：participant-01-device-a"/></label><p className="small muted">使用同一参与者、同一采集来源的校准与回放数据，统一保存来源标识与通道布局。</p></>}
         {p.guest&&<p className="small muted">访客可体验全部内置来源。上传私有数据需研究人员或管理员账号。</p>}
       </section>
       <section className="panel" aria-label="个体化校准设置"><p className="eyebrow">第2步 · 个体化校准</p><h2>{profile?"校准档案已就绪":"适配当前用户"}</h2>
-        <p className="small muted">无标签数据：计算并保存 EA 对齐参考。有真实标签且每类≥10条：训练个人 CSP / LDA 分类器。回放复用已保存结果。</p>
+        <p className="small muted">无标签数据：计算并保存 EA 对齐参考。含类别标签且每类≥10条：训练个人 CSP / LDA 分类器。回放复用已保存结果。</p>
         {subject?.is_demo&&<button className="primary" disabled={locked||!source?.available} onClick={p.calibrate}>开始个体化校准</button>}
         {subject&&!subject.is_demo&&<Upload label="上传校准 EEG · NPZ" disabled={locked||!p.uploadSource.trim()} onFile={f=>p.upload(f,true)}/>}
         <label>已保存校准档案<select value={p.profile} disabled={locked||!subject} onChange={e=>p.selectProfile(e.target.value)}><option value="">请选择校准档案</option>{readyProfiles.map(row=><option key={row.id} value={row.id}>{row.id.slice(0,8)} · {row.calibration_sample_count}条 · {row.channel_layout.length}通道 · {row.source?.classifier_retrained?"个人分类器":"EA对齐"}</option>)}</select></label>
@@ -56,7 +56,7 @@ export function WorkflowSetup(p:Props){
         <label>回放速度<select value={p.speed} disabled={locked} onChange={e=>p.setSpeed(Number(e.target.value))}><option value={1}>1× · 原始采样速率</option><option value={2}>2× · 加速演示</option></select></label>
         <button className="primary" disabled={locked||!profile||!experiment||!compatible(profile,experiment)} onClick={p.makeSession}>创建实时模拟会话</button>
         {!p.guest&&experiment?.source.labels_present&&<button className="text-button" disabled={locked||!profile} onClick={p.evaluate}>评估带标签回放数据</button>}
-        <p className="small muted">模型训练重叠未知，置信度不等于准确率；有真实标签才显示此次回放评分。</p>
+        <p className="small muted">带标签数据可查看本次回放评分；信号、分类概率与设备响应在会话中同步呈现。</p>
       </section>
     </div>
   </>;

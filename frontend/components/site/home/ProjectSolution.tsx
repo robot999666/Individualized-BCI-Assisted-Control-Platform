@@ -32,7 +32,7 @@ export default function ProjectSolution() {
         <SectionHeading
           eyebrow="项目方案"
           title="从运动想象脑电到离散辅助指令"
-          description="ALS-BCI 将科研数据、算法模型和网页交互整合为一条可操作、可观察、可复现的实验链路。"
+          description="个体化脑机辅助控制平台 将科研数据、算法模型和网页交互整合为一条可操作、可观察、可复现的实验链路。"
         />
         <div className="grid gap-5 md:grid-cols-3">
           {STEPS.map((step, index) => (

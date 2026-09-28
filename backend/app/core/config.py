@@ -17,7 +17,7 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    app_name: str = "ALS-BCI V0 Demo"
+    app_name: str = "个体化脑机辅助控制平台"
     app_version: str = "0.1.0"
     database_url: str = "sqlite:///../runtime/development.sqlite"
     artifact_dir: Path = _REPO_DIR / "runtime" / "artifacts"

@@ -1,2 +1,2 @@
 import Link from "next/link";
-export default function Footer(){return <footer className="site-footer"><span>ALS–BCI · 科研与比赛软件原型<br/><small>非医疗器械，不提供诊断、治疗或临床有效性承诺。</small></span><span>EOG: REAL MODEL · Devices: SIMULATED<br/><Link href="/operations">系统运行中心 ↗</Link></span></footer>}
+export default function Footer(){return <footer className="site-footer"><span>个体化脑机辅助控制平台<br/><small>个体化校准 · 双模态确认 · 闭环控制</small></span><span>EEG + EOG · 辅助设备仿真<br/><Link href="/operations">系统运行中心 ↗</Link></span></footer>}

@@ -12,7 +12,7 @@ from app.core.config import Settings
 from app.schemas.assistant import AssistantChatResponse, AssistantSource
 from app.services.rag import ProjectKnowledgeIndex, SearchResult
 
-SYSTEM_PROMPT = """你是 ALS-BCI 项目的项目知识助手。请严格遵守：
+SYSTEM_PROMPT = """你是个体化脑机辅助控制平台的项目知识助手。请严格遵守：
 1. 优先且主要依据用户消息中提供的项目资料回答，不得把项目尚未完成的功能描述为已经实现。
 2. 如果项目资料中没有答案，明确回答“当前项目资料中未说明这一内容。”，不要猜测。
 3. 可以对专业概念做简短通俗解释，但必须明确标注“通用概念解释”，与项目资料明确说明的内容区分。
