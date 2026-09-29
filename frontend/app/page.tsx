@@ -1,4 +1,4 @@
-import Link from "next/link";
+import Hero from "@/components/site/home/Hero";
 
 const capabilities = [
   ["01", "个体化 EEG 校准", "为每位使用者保存脑电对齐参考、模型版本与通道布局，形成可复用、可追溯的个体化档案。", "个体适配"],
@@ -9,30 +9,9 @@ const capabilities = [
   ["06", "结果和告警可追溯", "工作台展示信号、分类概率与安全决策；运行中心汇总告警处理人和响应耗时。", "运行统计"],
 ];
 export default function Home() {
-  return <div className="platform-home">
-    <section className="hero-grid">
-      <div><p className="eyebrow">个体化脑机辅助控制平台</p>
-        <h1>让每一次意图，<br/><em>连接自主行动。</em></h1>
-        <p className="hero-subtitle">面向重度运动障碍人群的<br/>脑电与眼电协同辅助交互</p>
-        <p className="muted">面向 ALS 中晚期、重度脑卒中后遗症等重度运动障碍人群。融合 EEG（脑电）意图识别与 EOG（眼电）眨眼确认，串联个体化校准、安全控制和设备响应。</p>
-        <div className="actions"><Link className="primary" href="/lab">进入控制工作台 ↗</Link><a className="secondary" href="#architecture">查看系统流程 ↓</a></div>
-        <p className="small muted">个体化适配 · 双模态确认 · 多设备仿真 · 全流程追溯</p>
-      </div>
-      <div className="hero-diagram"><span className="tag real">脑电识别 → 眼电确认 → 安全响应</span>
-        <svg viewBox="0 0 500 260" role="img" aria-label="脑电识别、眼电确认与辅助设备仿真的系统架构示意">
-          <defs><linearGradient id="wave"><stop stopColor="#34d399"/><stop offset="1" stopColor="#38bdf8"/></linearGradient></defs>
-          {[0,1,2].map(i=><path key={i} d={`M20 ${65+i*65} l40 0 10 -8 10 16 10 -38 10 60 10 -38 10 8 25 0 10 -15 10 30 10 -15 40 0`} fill="none" stroke="url(#wave)" strokeWidth="2" opacity={1-i*.2}/>)}
-          <path d="M250 130 H285 M380 130 H430" stroke="#334155" strokeWidth="2"/>
-          <rect x="285" y="85" width="95" height="90" rx="18" fill="#102b2d" stroke="#34d399"/>
-          <text x="332" y="122" fill="#6ee7b7" textAnchor="middle" fontSize="13">安全判断</text><text x="332" y="147" fill="#cbd5e1" textAnchor="middle" fontSize="12">停止 / 执行</text>
-          <circle cx="452" cy="130" r="22" fill="#162438" stroke="#38bdf8"/>
-        </svg>
-        <div className="diagram-bottom"><span>EEG（脑电）<br/><small>个体化校准与四分类识别</small></span><span>EOG（眼电）+ 设备<br/><small>眨眼模型与设备闭环</small></span></div>
-        <p className="small muted">系统架构示意 · 实时信号与决策见控制工作台</p>
-      </div>
-    </section>
+  return <><Hero /><div className="platform-home">
     <section id="architecture" className="flow-section"><p className="eyebrow">四步完成演示</p><h2>从个体化校准，到设备响应结果</h2><div className="flow">① 选择演示用户 → ② 生成脑电校准档案 → ③ 创建 EEG（脑电）实验 → ④ 查看脑电预测、眼电确认、设备响应与告警处理</div></section>
     <section id="capabilities" className="capability-grid">{capabilities.map(([n,title,desc,mode])=><article className="panel" key={n}><div className="card-top"><span className="number">{n}</span><span className="tag real">{mode}</span></div><h3>{title}</h3><p className="muted">{desc}</p></article>)}</section>
     <section className="panel evidence"><h2>在一个工作台掌握完整控制闭环</h2><p>融合 EEG 意图识别与 EOG 眨眼确认，从个体化校准到辅助设备响应贯通全流程。工作台同步展示脑电波形、四类意图概率、各阶段计算耗时、安全决策和设备仿真回执；运行中心集中呈现命令、告警与处理记录。</p><p className="muted">覆盖轮椅、护理床、紧急呼叫和智能家居四类仿真场景，支持多来源回放、异常场景验证与运行过程追溯。</p></section>
-  </div>;
+  </div></>;
 }
