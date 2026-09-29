@@ -38,3 +38,15 @@
 使用 `deploy/update-frontend.sh` 从当前已验证版本复制新发布目录，合并本次前端源码与静态产物，原子切换 `/opt/als-bci/current`。后端、私有环境、数据库、模型与用户数据沿用旧版本，不重启业务服务；保留旧哈希资源供已打开的工作台使用。
 
 `FRONTEND_RELEASE_COMMIT` 记录前端版本，`RELEASE_COMMIT` 保留原后端发布标识，`PREVIOUS_FRONTEND_RELEASE` 记录回滚目录。切换后检查首页标识、HTTPS 健康接口及 Nginx/后端服务状态，失败时自动切回旧目录。公网补充验收使用原账号验证登录、当前用户和运行中心访问，只输出状态，不输出密码或业务记录。
+
+### 公网发布结果
+
+前端已发布到 `/opt/als-bci/releases/hero-34b08d4`，代码版本 `34b08d4b45a9bbe729684bcc5bbc6b4d7664cb38`；回滚目录为 `/opt/als-bci/releases/b34b5c0`。2026-09-29 02:24 UTC 公网验收：
+
+- 首页 HTTP 200，HTML 完整响应耗时 293 ms（单次当前网络观测）；11 个首屏静态资源全部 HTTP 200。
+- 内置浏览器加载真实 3D 核心成功，控制台无错误；Hero CTA 正常进入原工作台登录页。
+- 管理员、研究人员、照护人员、演示访客均通过登录、当前用户、运行中心访问与 Secure Cookie 检查；检查后退出本次新建登录会话。
+- API 健康状态正常，MySQL 正常，EOG 为 `REAL_MODEL` 且状态正常；四套演示来源均可用。
+- Nginx、后端和 MySQL 服务保持运行。后端 Python 源码整体校验值及后端进程号与发布前一致，未重启业务服务。
+
+详细验收结果保存在本机 `temp/deploy/hero-public-acceptance.json`，公网截图位于 `output/hero/public-hero.png`，两者均未纳入 Git。
