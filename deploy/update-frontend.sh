@@ -19,6 +19,7 @@ test "$(cat "$release/FRONTEND_RELEASE_COMMIT")" = "$commit"
 test -s "$release/frontend/out/index.html"
 test -s "$release/frontend/out/lab/index.html"
 test -s "$release/frontend/out/operations/index.html"
+test -s "$release/frontend/out/security-headers.conf"
 grep -q 'NEURAL CORE' "$release/frontend/out/index.html"
 printf '%s\n' "$previous" > "$release/PREVIOUS_FRONTEND_RELEASE"
 find "$release/frontend" -type d -exec chmod 755 {} +
@@ -31,6 +32,7 @@ rollback() {
   if [ "$result" -ne 0 ] && [ "$switched" -eq 1 ]; then
     ln -s "$previous" /opt/als-bci/current-hero-rollback
     mv -Tf /opt/als-bci/current-hero-rollback /opt/als-bci/current
+    nginx -t && systemctl reload nginx
     echo "Frontend rolled back to $previous" >&2
   fi
   exit "$result"
@@ -39,6 +41,9 @@ trap rollback EXIT
 ln -s "$release" /opt/als-bci/current-hero-next
 mv -Tf /opt/als-bci/current-hero-next /opt/als-bci/current
 switched=1
+# CSP script hashes belong to this static build; reload them with the new files.
+nginx -t
+systemctl reload nginx
 page=$(curl -fsS https://152.136.191.171:9443/)
 grep -q 'NEURAL CORE' <<< "$page"
 curl -fsS https://152.136.191.171:9443/api/v1/health/live >/dev/null

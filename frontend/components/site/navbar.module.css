@@ -1,0 +1,7 @@
+.navigation a { position:relative; }
+.navigation a::after { content:"";position:absolute;bottom:-7px;left:0;right:0;height:1px;background:linear-gradient(90deg,#7de4f3,#6297fa);transform:scaleX(0);transform-origin:left;transition:transform .26s ease; }
+.navigation a:hover::after,.navigation a:focus-visible::after { transform:scaleX(1); }
+.navigation a:global(.primary)::after { display:none; }
+.brand:hover svg { filter:drop-shadow(0 0 8px #5fc9ef55);scale:1.035; }
+.brand svg { transition:filter .25s,scale .25s; }
+@media(prefers-reduced-motion:reduce) { .navigation a::after,.brand svg { transition:none; }.brand:hover svg { scale:1; } }
