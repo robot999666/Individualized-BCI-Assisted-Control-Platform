@@ -2,14 +2,13 @@
 
 from __future__ import annotations
 
-import io
-import zipfile
 from dataclasses import dataclass
 
 import numpy as np
 from fastapi import HTTPException
 
 from app.core.config import get_settings
+from app.services.array_uploads import read_numeric_npz
 
 
 @dataclass(frozen=True)
@@ -41,33 +40,8 @@ def read_bci_npz(
         _reject("输入单位必须为 μV（表单字段 unit=uV）")
 
     max_decompressed = settings.bci_max_decompressed_mb * 1024 * 1024
-    try:
-        with zipfile.ZipFile(io.BytesIO(content)) as archive:
-            members = archive.infolist()
-            if not members:
-                _reject("NPZ 文件为空")
-            if any(info.flag_bits & 0x1 for info in members):
-                _reject("不支持加密 NPZ 文件")
-            if any("/" in info.filename or "\\" in info.filename for info in members):
-                _reject("NPZ 中包含非法路径")
-            if sum(info.file_size for info in members) > max_decompressed:
-                _reject(
-                    f"NPZ 解压后超过大小限制（{settings.bci_max_decompressed_mb}MB）",
-                    413,
-                )
-    except zipfile.BadZipFile:
-        _reject("NPZ 文件损坏或格式无效")
-
-    try:
-        with np.load(io.BytesIO(content), allow_pickle=False) as payload:
-            if "X" not in payload.files:
-                _reject("NPZ 缺少必需数组 X")
-            if any(name not in {"X", "y"} for name in payload.files):
-                _reject("NPZ 仅允许包含 X 和可选 y 数组")
-            x = np.asarray(payload["X"])
-            y = np.asarray(payload["y"]) if "y" in payload.files else None
-    except (ValueError, OSError, EOFError) as exc:
-        _reject(f"NPZ 数组读取失败：{exc}")
+    arrays = read_numeric_npz(content, max_decompressed)
+    x, y = arrays['X'], arrays.get('y')
 
     if x.dtype.kind not in "fiu":
         _reject("X 必须是数值数组，禁止对象数组")
@@ -92,7 +66,7 @@ def read_bci_npz(
     if y is not None:
         if y.dtype.kind not in "iu" or y.shape != (n_trials,):
             _reject("y 必须是一维整数数组，长度与 trial 数一致")
-        y = np.asarray(y, dtype=np.int64)
         if not np.isin(y, [0, 1, 2, 3]).all():
             _reject("y 标签只能取 0、1、2、3")
+        y = np.asarray(y, dtype=np.int64)
     return BciBatch(x=x, y=y)

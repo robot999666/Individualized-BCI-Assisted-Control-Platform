@@ -50,6 +50,15 @@ class Settings(BaseSettings):
     # 上传/响应限制
     max_upload_mb: int = 20
     max_intent_windows: int = 100
+    max_json_body_kb: int = 16
+    max_active_requests: int = 32
+    max_bulk_requests: int = 2
+    request_body_timeout_seconds: float = 60
+    max_live_sessions: int = 100
+    max_live_array_mb: int = 512
+    max_session_streams: int = 3
+    idle_session_seconds: int = 1800
+    max_login_sessions_per_user: int = 100
 
     # BCI 四分类冷启动模型
     bci_sampling_rate_hz: int = 250

@@ -25,12 +25,13 @@ export function useSession(session:string,onError:(message:string)=>void,onSessi
       socket.onopen=()=>{attempt=0;setConnected(true)};
       socket.onmessage=event=>{
         if(!active)return;
-        try{accept(JSON.parse(event.data) as Tick)}catch{onError("实时数据响应无效，请暂停并重新连接。");socket?.close()}
+        try{if(typeof event.data!=="string"||event.data.length>256000)throw new Error("frame too large");accept(JSON.parse(event.data) as Tick)}catch{onError("实时数据响应无效，请暂停并重新连接。");socket?.close()}
       };
       socket.onerror=()=>socket?.close();
       socket.onclose=event=>{
         if(!active)return;
         setConnected(false);
+        if(event.code===4429){onError("此会话的实时连接数量已达上限，请关闭其他标签页后重试。");onSessionLost();return}
         if(event.code===4401||event.code===4403){onError("登录已失效或当前账号无权查看此会话，请重新登录。");onSessionLost();return}
         if(event.code===4404||event.code===4409){onError("会话已关闭或服务器已重启，请重新创建会话。");onSessionLost();return}
         attempt++;retry=window.setTimeout(connect,Math.min(5000,250*2**Math.min(attempt,5)));

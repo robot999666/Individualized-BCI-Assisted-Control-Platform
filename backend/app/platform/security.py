@@ -29,6 +29,8 @@ def current_user(request: Request):
 
 
 def user_from_token(token):
+    if len(token) != 43 or any(c not in 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_' for c in token):
+        raise HTTPException(401, "请先登录")
     with Session() as db:
         login = db.get(LoginSession, digest(token))
         if not login or login.expires < time.time():
@@ -37,8 +39,9 @@ def user_from_token(token):
         if not user or not user.active:
             raise HTTPException(401, "账号不可用")
         role = db.scalar(select(UserRole.role).where(UserRole.user_id == user.id))
-        login.last_seen = time.time()
-        db.commit()
+        if time.time()-login.last_seen >= 60:
+            login.last_seen = time.time()
+            db.commit()
         return {"id": user.id, "username": user.username, "role": role}
 
 

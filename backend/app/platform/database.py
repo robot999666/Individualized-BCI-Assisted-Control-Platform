@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 from uuid import uuid4
 
-from sqlalchemy import Boolean, Column, Float, ForeignKey, Integer, JSON, String, create_engine
+from sqlalchemy import Boolean, Column, Float, ForeignKey, Integer, JSON, String, create_engine, event
 from sqlalchemy.orm import declarative_base, sessionmaker
 
 from app.core.config import get_settings
@@ -151,8 +151,16 @@ settings = get_settings()
 if settings.production and not settings.database_url.startswith("mysql+pymysql://"):
     raise RuntimeError("Production requires MySQL")
 settings.artifact_dir.mkdir(parents=True, exist_ok=True)
-engine = create_engine(settings.database_url, pool_pre_ping=True,
-                       **({"connect_args": {"check_same_thread": False}} if settings.database_url.startswith("sqlite") else {}))
+engine = create_engine(settings.database_url, pool_pre_ping=True, pool_size=10, max_overflow=5, pool_timeout=5,
+                       connect_args=({"check_same_thread": False, "timeout": 30} if settings.database_url.startswith("sqlite")
+                                     else {"connect_timeout": 5, "read_timeout": 10, "write_timeout": 10}))
+if engine.dialect.name == 'sqlite':
+    @event.listens_for(engine, 'connect')
+    def sqlite_pragmas(connection, record):
+        cursor=connection.cursor()
+        cursor.execute('PRAGMA journal_mode=WAL')
+        cursor.execute('PRAGMA foreign_keys=ON')
+        cursor.close()
 Session = sessionmaker(engine, expire_on_commit=False)
 
 

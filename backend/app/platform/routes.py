@@ -9,14 +9,16 @@ import secrets
 import time
 from typing import Literal
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, Response, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, Response, UploadFile, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel, Field
 import numpy as np
 import psutil
-from sqlalchemy import select, text
+from sqlalchemy import select, text, delete, update
+from sqlalchemy.exc import IntegrityError
 
 from app.api.deps import bci_service
 from app.core.config import get_settings
+from app.core.resource_guard import WindowLimiter, password_slots, run_blocking
 from app.platform import runtime
 from app.platform.database import (Alert, Audit, Command, Device, Experiment, InferenceSession,
     LoginSession, Profile, Session, Subject, User, UserRole, SystemConfig, engine, now, record_audit, serialize, uid)
@@ -24,15 +26,18 @@ from app.platform.inference import PIPELINE_VERSION, calibrate, fingerprint
 from app.platform.security import DUMMY_HASH, current_user, digest, hasher, require, verify, user_from_token
 from app.services.bci_model_service import CHANNEL_NAMES
 from app.services.npz_reader import read_bci_npz
+from app.services.array_uploads import read_numeric_npz, read_numeric_npy
 from app.platform.sources import PRESETS, directory, load_source, check_pair
 
 router = APIRouter()
 settings = get_settings()
-login_attempts = {}
+login_limiter = WindowLimiter(2000)
+login_attempts = login_limiter.entries
 
 
 def sha(path):
-    return hashlib.sha256(path.read_bytes()).hexdigest()
+    with path.open('rb') as stream:
+        return hashlib.file_digest(stream, 'sha256').hexdigest()
 
 
 def own(row, user):
@@ -81,22 +86,26 @@ class Credentials(BaseModel):
 @router.post('/auth/login')
 async def login(body: Credentials, request: Request, response: Response):
     ip = request.client.host if request.client else 'unknown'
-    ts = time.monotonic()
-    # Bounded process-local throttle, complemented by Nginx limits.
-    if len(login_attempts) > 2000:
-        login_attempts.clear()
-    recent = [t for t in login_attempts.get(ip, []) if ts-t < 60]
-    if len(recent) >= 8:
+    if not login_limiter.allow(ip, 8):
         raise HTTPException(429, '登录尝试过多，请稍后重试')
-    login_attempts[ip] = recent + [ts]
     with Session() as db:
         user = db.scalar(select(User).where(User.username == body.username))
-        valid = verify(body.password, user.password_hash if user else DUMMY_HASH)
+        async with password_slots.slot():
+            valid = await run_blocking(verify, body.password, user.password_hash if user else DUMMY_HASH)
+        if user:
+            db.rollback()  # End a MySQL repeatable-read snapshot before checking revocation.
+            db.refresh(user)
         if not valid or not user or not user.active:
             record_audit(db, user.id if user else None, 'login_failed')
             db.commit()
             raise HTTPException(401, '账号或密码错误')
         token = secrets.token_urlsafe(32)
+        db.execute(delete(LoginSession).where(LoginSession.expires < time.time()))
+        db.execute(delete(LoginSession).where(LoginSession.token_hash == digest(request.cookies.get('bci_session', ''))))
+        old_tokens = list(db.scalars(select(LoginSession).where(LoginSession.user_id == user.id)
+                                    .order_by(LoginSession.last_seen.desc())))
+        for old in old_tokens[settings.max_login_sessions_per_user-1:]:
+            db.delete(old)
         db.add(LoginSession(token_hash=digest(token), user_id=user.id,
                             expires=time.time()+settings.session_hours*3600, last_seen=time.time()))
         role = db.scalar(select(UserRole.role).where(UserRole.user_id == user.id))
@@ -122,11 +131,12 @@ async def demo_access():
 @router.post('/auth/logout')
 async def logout(request: Request, response: Response, user=Depends(current_user)):
     with Session() as db:
-        row = db.get(LoginSession, digest(request.cookies.get('bci_session','')))
+        token_hash=digest(request.cookies.get('bci_session',''))
+        row = db.get(LoginSession, token_hash)
         if row:
             db.delete(row)
         for replay in list(runtime.live.values()):
-            if replay.owner == user['id']:
+            if replay.owner == user['id'] and replay.auth_session == token_hash:
                 replay.generation+=1
                 runtime.stop_all(db, replay, 'LOGOUT')
                 replay.running = False
@@ -152,12 +162,18 @@ async def users(user=Depends(require('admin'))):
 async def new_user(body: NewUser, user=Depends(require('admin'))):
     if len(body.password) < 12:
         raise HTTPException(422, '密码至少12位')
+    async with password_slots.slot():
+        password_hash = await run_blocking(hasher.hash, body.password)
     with Session() as db:
         if db.scalar(select(User).where(User.username==body.username)):
             raise HTTPException(409, '账号已存在')
-        row = User(username=body.username,password_hash=hasher.hash(body.password))
+        row = User(username=body.username,password_hash=password_hash)
         db.add(row)
-        db.flush()
+        try:
+            db.flush()
+        except IntegrityError as exc:
+            db.rollback()
+            raise HTTPException(409, '账号已存在') from exc
         db.add(UserRole(user_id=row.id,role=body.role))
         record_audit(db,user['id'],'user_created',user_id=row.id,role=body.role)
         db.commit()
@@ -240,11 +256,13 @@ async def save_profile(db,subject,user,x,source,y=None):
                 raise ValueError('有标签个体化训练要求每类至少10个trial')
             from algorithms.system_integration.core import EEGClassifier
             model=EEGClassifier(calibrated=True,n_channels=x.shape[1])
-            await asyncio.to_thread(model.calibrate,x,y)
+            async with runtime.bulk_semaphore:
+                await run_blocking(model.calibrate,x,y)
             with path.open('wb') as stream:
                 pickle.dump(model,stream)
         else:
-            matrix=await asyncio.to_thread(calibrate,x)
+            async with runtime.bulk_semaphore:
+                matrix=await run_blocking(calibrate,x)
             np.savez_compressed(path,ea_reference=matrix)
     except (ValueError, np.linalg.LinAlgError) as exc:
         raise HTTPException(422,str(exc)) from exc
@@ -270,7 +288,7 @@ async def profiles(user=Depends(current_user)):
 
 
 @router.post('/subjects/{subject_id}/calibrate-demo')
-async def calibrate_demo(subject_id:str,source_id:str='a01-3ch',user=Depends(require('admin','researcher','guest'))):
+async def calibrate_demo(subject_id:str,source_id:str=Query('a01-3ch',max_length=80),user=Depends(require('admin','researcher','guest'))):
     with Session() as db:
         subject=own(db.get(Subject,subject_id),user)
         if not subject.is_demo:
@@ -281,18 +299,19 @@ async def calibrate_demo(subject_id:str,source_id:str='a01-3ch',user=Depends(req
 
 async def upload_batch(file):
     data=await file.read(settings.max_upload_mb*1024*1024+1)
-    return read_bci_npz(file.filename or '',data,250,'uV'),hashlib.sha256(data).hexdigest()
+    batch=await run_blocking(read_bci_npz,file.filename or '',data,250,'uV')
+    return batch,hashlib.sha256(data).hexdigest()
 
 
 @router.post('/subjects/{subject_id}/calibrate-upload')
 async def calibrate_upload(subject_id:str,file:UploadFile=File(...),source_id:str=Form('default',min_length=1,max_length=80),user=Depends(require('admin','researcher'))):
     if not source_id.strip():
         raise HTTPException(422,'采集来源标识不能为空')
-    batch,checksum=await upload_batch(file)
     with Session() as db:
         subject=own(db.get(Subject,subject_id),user)
         if subject.is_demo:
             raise HTTPException(422,'上传数据请选择私有研究用户；Demo只使用内置公开数据')
+        batch,checksum=await upload_batch(file)
         return await save_profile(db,subject,user,batch.x,{'dataset':'USER_UPLOAD','sha256':checksum,'split':'calibration',
                                                    'source_id':f'upload:{subject.id}:{source_id.strip()}',
                                                    'protocol':'User-supplied; independent validation not verified'},batch.y)
@@ -342,7 +361,7 @@ def save_experiment(db,subject,user,x,source,y=None):
 
 
 @router.post('/subjects/{subject_id}/experiments/demo')
-async def demo_experiment(subject_id:str,source_id:str='a01-3ch',user=Depends(require('admin','researcher','guest'))):
+async def demo_experiment(subject_id:str,source_id:str=Query('a01-3ch',max_length=80),user=Depends(require('admin','researcher','guest'))):
     with Session() as db:
         subject=own(db.get(Subject,subject_id),user)
         if not subject.is_demo:
@@ -355,11 +374,11 @@ async def demo_experiment(subject_id:str,source_id:str='a01-3ch',user=Depends(re
 async def upload_experiment(subject_id:str,file:UploadFile=File(...),source_id:str=Form('default',min_length=1,max_length=80),user=Depends(require('admin','researcher'))):
     if not source_id.strip():
         raise HTTPException(422,'采集来源标识不能为空')
-    batch,checksum=await upload_batch(file)
     with Session() as db:
         subject=own(db.get(Subject,subject_id),user)
         if subject.is_demo:
             raise HTTPException(422,'上传数据请选择私有研究用户；Demo只使用内置公开数据')
+        batch,checksum=await upload_batch(file)
         return save_experiment(db,subject,user,batch.x,{'dataset':'USER_UPLOAD','upload_sha256':checksum,
             'source_id':f'upload:{subject.id}:{source_id.strip()}',
             'split':'evaluation','labels_present':batch.y is not None,'protocol':'Unverified provenance; no independent accuracy claim'},batch.y)
@@ -375,13 +394,17 @@ async def experiments(user=Depends(current_user)):
 
 
 class NewSession(BaseModel):
-    profile_id:str
-    experiment_id:str
+    profile_id:str = Field(min_length=1, max_length=32)
+    experiment_id:str = Field(min_length=1, max_length=32)
     speed:Literal[1,2]=1
 
 
 @router.post('/sessions')
-async def new_session(body:NewSession,user=Depends(require('admin','researcher','guest'))):
+async def new_session(body:NewSession,request:Request,user=Depends(require('admin','researcher','guest'))):
+    token_hash=digest(request.cookies.get('bci_session',''))
+    others = [r for r in runtime.live.values() if r.owner != user['id'] or r.auth_session != token_hash]
+    if len(others) >= settings.max_live_sessions:
+        raise HTTPException(503,'会话容量已满，请关闭旧会话')
     with Session() as db:
         profile=own(db.get(Profile,body.profile_id),user)
         exp=own(db.get(Experiment,body.experiment_id),user)
@@ -411,12 +434,11 @@ async def new_session(body:NewSession,user=Depends(require('admin','researcher',
             raise HTTPException(422,'校准与回放通道布局不一致')
         if set(profile.source['trial_hashes']) & {fingerprint(t) for t in x}:
             raise HTTPException(422,'校准与Evaluation存在重复trial，拒绝数据泄漏')
-        if len(runtime.live)>=100 and not any(r.owner==user['id'] for r in runtime.live.values()):
-            raise HTTPException(503,'会话容量已满，请关闭旧会话')
         row=InferenceSession(id=uid(),owner_id=user['id'],profile_id=profile.id,experiment_id=exp.id)
         db.add(row)
         db.flush()
         replay=runtime.Replay(row.id,user['id'],x,reference,profile.id,speed=body.speed)
+        replay.auth_session=token_hash
         replay.personalized=personalized
         if exp.source.get('eog_path'):
             eog_path=artifact_path(exp.source['eog_path'])
@@ -431,6 +453,8 @@ async def new_session(body:NewSession,user=Depends(require('admin','researcher',
                 raise HTTPException(422,'EOG与EEG窗口不匹配')
             replay.eog_starts=exp.source.get('eog_starts',[])
             replay.eog_protocol=exp.source.get('eog_source',{}).get('protocol','Uploaded EOG paired with EEG; chronology provided by uploader')
+        if sum(runtime.array_bytes(r) for r in others)+runtime.array_bytes(replay) > settings.max_live_array_mb*1024*1024:
+            raise HTTPException(503,'会话内存容量已满，请关闭旧会话后重试')
         config=db.get(SystemConfig,'safety')
         if config:
             replay.controller=runtime.SafetyController(**config.value)
@@ -444,7 +468,7 @@ async def new_session(body:NewSession,user=Depends(require('admin','researcher',
                 replay.selected_device=device.id
         # Validate the new input completely before retiring the current working session.
         for old in list(runtime.live.values()):
-            if old.owner==user['id']:
+            if old.owner==user['id'] and old.auth_session==token_hash:
                 old.generation+=1
                 runtime.stop_all(db,old,'NEW_SESSION')
                 old.running=False
@@ -491,23 +515,27 @@ async def session_stream(websocket: WebSocket, session_id: str):
     except HTTPException:
         await websocket.close(code=4401)
         return
-    await websocket.accept()
     connected_replay=None
     try:
+        with Session() as db:
+            replay = get_replay(db, session_id, user)
+            if replay.streams >= settings.max_session_streams:
+                await websocket.close(code=4429)
+                return
+            connected_replay=replay
+            replay.streams+=1
+        await websocket.accept()
         while True:
             user = user_from_token(websocket.cookies.get('bci_session', ''))
             if user['role'] not in {'admin', 'researcher', 'guest'}:
                 raise HTTPException(403, '会话权限已撤销')
             with Session() as db:
                 replay = get_replay(db, session_id, user)
-                if connected_replay is None:
-                    connected_replay=replay
-                    replay.streams+=1
                 async with replay.lock:
                     payload = await runtime.tick(db, replay)
-            await websocket.send_json(payload)
+            await asyncio.wait_for(websocket.send_json(payload), timeout=5)
             await asyncio.sleep(.1)
-    except WebSocketDisconnect:
+    except (WebSocketDisconnect, TimeoutError):
         return
     except HTTPException as exc:
         await websocket.close(code=4401 if exc.status_code == 401 else 4403 if exc.status_code == 403 else 4404 if exc.status_code == 404 else 4409)
@@ -666,7 +694,7 @@ async def health_detail(user=Depends(require('admin'))):
 
 
 @router.get('/operations')
-async def operations(session_id:str|None=None,user=Depends(current_user)):
+async def operations(session_id:str|None=Query(None,max_length=32),user=Depends(current_user)):
     with Session() as db:
         result={'session_id':session_id}
         if session_id:
@@ -749,10 +777,12 @@ async def acknowledge(alert_id:str,body:AlertAcknowledgement,user=Depends(requir
             raise HTTPException(404,'告警不存在')
         if alert.acknowledged_at:
             raise HTTPException(409,'此告警已记录处理结果')
-        alert.status='ACKNOWLEDGED'
-        alert.acknowledged_at=now()
-        alert.acknowledged_by=user['id']
-        alert.resolution=body.result + (f'：{body.notes.strip()}' if body.notes.strip() else '')
+        changed=db.execute(update(Alert).where(Alert.id==alert.id, Alert.acknowledged_at.is_(None))
+                           .values(status='ACKNOWLEDGED', acknowledged_at=now(), acknowledged_by=user['id'],
+                                   resolution=body.result + (f'：{body.notes.strip()}' if body.notes.strip() else '')))
+        if changed.rowcount != 1:
+            raise HTTPException(409,'此告警已记录处理结果')
+        db.refresh(alert)
         record_audit(db,user['id'],'alert_acknowledged',alert_id=alert.id)
         db.commit()
         return {**serialize(alert),'response_time_seconds':max(0,(datetime.fromisoformat(alert.acknowledged_at)-datetime.fromisoformat(alert.created_at)).total_seconds())}
@@ -785,7 +815,7 @@ async def set_configuration(body:SafetyConfig,user=Depends(require('admin'))):
 
 
 class EvaluationRequest(BaseModel):
-    profile_id:str
+    profile_id:str = Field(min_length=1, max_length=32)
 
 
 @router.post('/experiments/{experiment_id}/evaluate')
@@ -818,7 +848,8 @@ async def evaluate_experiment(experiment_id:str,body:EvaluationRequest,user=Depe
         else:
             with np.load(ref_path,allow_pickle=False) as payload:
                 reference=payload['ea_reference']
-        p,latency=await asyncio.to_thread(predict,x,reference,personalized)
+        async with runtime.bulk_semaphore:
+            p,latency=await run_blocking(predict,x,reference,personalized)
         result={'accuracy':float(np.mean(p.argmax(1)==y)),'trials':len(x),'latency':latency,
                 'mode':'REAL','protocol':'Uploaded labeled evaluation with fixed calibration EA; pretraining overlap unknown',
                 'independent_validation':False,'profile_id':profile.id,'model_version':profile.model_version}
@@ -839,7 +870,7 @@ async def eog_demo_analysis(user=Depends(require('admin','researcher'))):
             windows=payload['X'][:,:250].copy()
         import asyncio
         async with lock:
-            results=await asyncio.to_thread(analyze_batch,windows)
+            results=await run_blocking(analyze_batch,windows)
     except ValueError as exc:
         raise HTTPException(422,str(exc)) from exc
     with Session() as db:
@@ -856,10 +887,10 @@ async def eog_upload_analysis(file:UploadFile=File(...),user=Depends(require('ad
     if not (file.filename or '').lower().endswith('.npy') or len(content)>16384:
         raise HTTPException(422,'仅接受小于16KiB、250点、μV的EOG .npy')
     try:
-        window=np.load(io.BytesIO(content),allow_pickle=False)
+        window=await run_blocking(read_numeric_npy,content,16384)
         import asyncio
         async with lock:
-            result=(await asyncio.to_thread(analyze_batch,np.asarray(window)[None,:]))[0]
+            result=(await run_blocking(analyze_batch,np.asarray(window)[None,:]))[0]
     except (ValueError,OSError,EOFError) as exc:
         raise HTTPException(422,'EOG格式或模型输出无效') from exc
     with Session() as db:
@@ -869,7 +900,6 @@ async def eog_upload_analysis(file:UploadFile=File(...),user=Depends(require('ad
 
 @router.post('/experiments/{experiment_id}/eog-upload')
 async def upload_eog_pair(experiment_id:str,file:UploadFile=File(...),prefiltered:bool=Form(False),user=Depends(require('admin','researcher'))):
-    import zipfile
     content=await file.read(16*1024*1024+1)
     if not (file.filename or '').lower().endswith('.npz') or len(content)>16*1024*1024:
         raise HTTPException(422,'EOG配对要求16MiB以内NPZ，仅包含X')
@@ -880,21 +910,15 @@ async def upload_eog_pair(experiment_id:str,file:UploadFile=File(...),prefiltere
         if any(r.owner==user['id'] and db.get(InferenceSession,r.id).experiment_id==exp.id for r in runtime.live.values()):
             raise HTTPException(409,'请先关闭使用该实验的会话，再更新EOG数据')
         try:
-            with zipfile.ZipFile(io.BytesIO(content)) as archive:
-                if len(archive.infolist())!=1 or archive.infolist()[0].filename!='X.npy' or archive.infolist()[0].file_size>64*1024*1024:
-                    raise ValueError('Invalid archive')
-            with np.load(io.BytesIO(content),allow_pickle=False) as payload:
-                original=payload['X']
-                if original.dtype.kind not in 'fiu':
-                    raise ValueError('EOG must be numeric')
-                x=np.asarray(original,dtype=np.float64)
+            arrays=await run_blocking(read_numeric_npz,content,64*1024*1024,('X',))
+            x=np.asarray(arrays['X'],dtype=np.float64)
             n=exp.source['samples']
             if x.shape not in {(n,501),(2*n,250)} or not np.isfinite(x).all():
                 raise ValueError('EOG shape mismatch')
             windows=x if x.shape[1]==250 else np.concatenate([x[:,offset:offset+250] for offset in (0,125,250)])
             if np.any(np.std(windows,axis=1)<1e-8):
                 raise ValueError('Constant EOG window')
-        except (ValueError,KeyError,OSError,zipfile.BadZipFile) as exc:
+        except (ValueError,KeyError,OSError) as exc:
             raise HTTPException(422,'EOG X须为数值(N,501)同步窗口或(2N,250)片段序列，250Hz/μV、全部有限且窗口非恒定') from exc
         relative=f"{user['id']}/{uid()}-eog.npz"
         path=artifact_path(relative);path.parent.mkdir(parents=True,exist_ok=True)

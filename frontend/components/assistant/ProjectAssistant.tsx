@@ -18,6 +18,8 @@ interface ChatMessage {
 const WELCOME =
   "你好，我可以帮你了解 个体化脑机辅助控制平台的研究背景、技术路线、实验平台和系统能力。";
 
+const MAX_MESSAGES = 60;
+
 const QUICK_QUESTIONS = [
   "项目解决什么问题？",
   "四分类意图是什么？",
@@ -99,14 +101,14 @@ export default function ProjectAssistant() {
       role: "user",
       content: question,
     };
-    setMessages((current) => [...current, userMessage]);
+    setMessages((current) => [current[0], ...current.slice(1).slice(-(MAX_MESSAGES-2)), userMessage]);
     setInput("");
     setSending(true);
 
     try {
       const response = await api.askAssistant(question);
       setMessages((current) => [
-        ...current,
+        current[0], ...current.slice(1).slice(-(MAX_MESSAGES-2)),
         {
           id: nextId.current++,
           role: "assistant",
@@ -116,7 +118,7 @@ export default function ProjectAssistant() {
       ]);
     } catch (error) {
       setMessages((current) => [
-        ...current,
+        current[0], ...current.slice(1).slice(-(MAX_MESSAGES-2)),
         {
           id: nextId.current++,
           role: "assistant",

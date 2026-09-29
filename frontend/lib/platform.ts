@@ -12,12 +12,19 @@ export type Row = {id:string; kind?:string; status?:string; created_at?:string; 
 export type Operations = { session_id?:string|null;health:Record<string,unknown>; real?:Record<string,unknown>; simulated:Record<string,unknown>; alerts:Row[]; alert_response?:{total:number;acknowledged:number;open:number;average_seconds:number|null;fastest_seconds:number|null}; commands:Row[]; audit_logs:Row[]; devices:Device[]; sessions:Row[] };
 
 const BASE = process.env.NEXT_PUBLIC_API_BASE_URL || "";
-export async function api<T>(path:string,body?:unknown,method?:string):Promise<T>{
+export async function api<T>(path:string,body?:unknown,method?:string,signal?:AbortSignal):Promise<T>{
   const form=body instanceof FormData;
-  const response=await fetch(`${BASE}/api/v1${path}`,{method:method||(body===undefined?"GET":"POST"),credentials:"include",headers:{"X-BCI-Request":"1",...(!form&&body!==undefined?{"Content-Type":"application/json"}:{})},body:body===undefined?undefined:form?body:JSON.stringify(body)});
-  const data=await response.json().catch(()=>({detail:`服务响应异常 (${response.status})，请稍后重试`}));
-  if(!response.ok)throw new Error(typeof data.detail==="string"?data.detail:Array.isArray(data.detail)?data.detail.map((item:{msg:string})=>item.msg).join("；"):`请求失败 (${response.status})`);
-  return data;
+  const controller=new AbortController();
+  const abort=()=>controller.abort();
+  signal?.addEventListener("abort",abort,{once:true});
+  if(signal?.aborted)controller.abort();
+  const timer=setTimeout(abort,90000);
+  try{
+    const response=await fetch(`${BASE}/api/v1${path}`,{method:method||(body===undefined?"GET":"POST"),credentials:"include",headers:{"X-BCI-Request":"1",...(!form&&body!==undefined?{"Content-Type":"application/json"}:{})},body:body===undefined?undefined:form?body:JSON.stringify(body),signal:controller.signal});
+    const data=await response.json().catch(()=>({detail:`服务响应异常 (${response.status})，请稍后重试`}));
+    if(!response.ok)throw new Error(typeof data.detail==="string"?data.detail:Array.isArray(data.detail)?data.detail.map((item:{msg:string})=>item.msg).join("；"):`请求失败 (${response.status})`);
+    return data;
+  }finally{clearTimeout(timer);signal?.removeEventListener("abort",abort)}
 }
 
 export function provenance(source:Provenance|undefined,subject:string,channels:number){

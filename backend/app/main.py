@@ -5,6 +5,7 @@ from contextlib import asynccontextmanager, suppress
 import time
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
+from fastapi.exceptions import RequestValidationError
 from sqlalchemy import select
 from app.platform import runtime
 from app.platform.database import Device, InferenceSession, Session, record_audit
@@ -12,6 +13,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.router import api_router
 from app.core.config import get_settings
+from app.core.resource_guard import RequestLimitsMiddleware
 
 settings = get_settings()
 
@@ -56,6 +58,13 @@ app = FastAPI(
 )
 
 
+@app.exception_handler(RequestValidationError)
+async def validation_error(request, exc):
+    # Never echo passwords, uploaded contents or attacker-controlled input.
+    return JSONResponse({'detail': [{'loc': error['loc'], 'msg': error['msg'], 'type': error['type']}
+                                     for error in exc.errors()[:20]]}, status_code=422)
+
+
 @app.middleware("http")
 async def platform_guard(request: Request, call_next):
     started = time.perf_counter()
@@ -65,6 +74,8 @@ async def platform_guard(request: Request, call_next):
             return JSONResponse({"detail": "Origin rejected"}, status_code=403)
         if settings.production and request.headers.get("x-bci-request") != "1":
             return JSONResponse({"detail": "Request header required"}, status_code=403)
+        if request.headers.get('sec-fetch-site') == 'cross-site' and not origin:
+            return JSONResponse({"detail": "Origin required"}, status_code=403)
     # Batch inference is research-only; project Q&A is available to every signed-in role.
     if settings.production and request.url.path.startswith(("/api/v1/analyze", "/api/v1/demo", "/api/v1/assistant/chat")):
         from app.platform.security import current_user
@@ -117,6 +128,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Last added is outermost: reject before parsing or API error handling.
+app.add_middleware(RequestLimitsMiddleware)
 
 app.include_router(api_router, prefix=settings.api_prefix)
 

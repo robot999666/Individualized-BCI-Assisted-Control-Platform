@@ -9,6 +9,7 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 from app.core.config import Settings
+from app.core.resource_guard import run_blocking
 from app.schemas.assistant import AssistantChatResponse, AssistantSource
 from app.services.rag import ProjectKnowledgeIndex, SearchResult
 
@@ -64,7 +65,7 @@ class ProjectAssistantService:
         context, included = self._build_context(matches)
         self._active_requests += 1
         try:
-            answer = await asyncio.to_thread(self._request_completion, question, context)
+            answer = await run_blocking(self._request_completion, question, context)
             return AssistantChatResponse(answer=answer, sources=self._sources(included))
         finally:
             self._active_requests -= 1
@@ -131,7 +132,10 @@ class ProjectAssistantService:
         )
         try:
             with urlopen(request, timeout=self.settings.assistant_timeout_seconds) as response:
-                body = json.loads(response.read().decode("utf-8"))
+                raw = response.read(256*1024+1)
+                if len(raw) > 256*1024:
+                    raise AssistantProviderError("上游模型响应超过大小限制")
+                body = json.loads(raw.decode("utf-8"))
         except HTTPError as exc:
             raise AssistantProviderError(f"上游模型服务返回 HTTP {exc.code}") from exc
         except (URLError, TimeoutError) as exc:
@@ -145,6 +149,8 @@ class ProjectAssistantService:
             raise AssistantProviderError("上游模型响应缺少回答内容") from exc
         if not answer:
             raise AssistantProviderError("上游模型返回了空回答")
+        if len(answer) > 10000:
+            raise AssistantProviderError("上游模型回答超过长度限制")
         if body["choices"][0].get("finish_reason") == "length":
             raise AssistantProviderError("上游模型回答超出长度限制")
         return answer

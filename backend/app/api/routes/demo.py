@@ -1,7 +1,7 @@
 """内置 S3 科研数据回放接口。"""
 
 from fastapi import APIRouter, Query
-from starlette.concurrency import run_in_threadpool
+from app.core.resource_guard import run_blocking
 
 from app.api.deps import bci_service, inference_semaphore
 from app.core.config import get_settings
@@ -19,7 +19,7 @@ async def get_demo_signals(
     count = min(trial_count, settings.max_intent_windows)
     x, y = bci_service.demo_batch(count)
     async with inference_semaphore:
-        probabilities = await run_in_threadpool(bci_service.predict_proba, x)
+        probabilities = await run_blocking(bci_service.predict_proba, x)
     return build_bci_response(
         source="demo",
         filename=None,

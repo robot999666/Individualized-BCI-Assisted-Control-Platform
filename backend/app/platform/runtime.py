@@ -5,10 +5,12 @@ from dataclasses import dataclass, field
 import time
 
 import numpy as np
-from sqlalchemy import select
+from sqlalchemy import select, delete
 
 from app.platform.database import (Alert, Command, Device, InferenceRecord, InferenceSession,
-                                   Session, now, record_audit, serialize, uid)
+                                   Session, LoginSession, now, record_audit, serialize, uid)
+from app.core.config import get_settings
+from app.core.resource_guard import run_blocking
 from app.platform.inference import predict
 from app.platform.safety import SafetyController, SimulatorAdapter
 from app.platform.eog import RealEOGProvider, analyze_batch
@@ -17,8 +19,13 @@ live = {}
 request_metrics = deque(maxlen=2000)
 inference_metrics = deque(maxlen=1000)
 inference_semaphore = asyncio.Semaphore(1)
+bulk_semaphore = asyncio.Semaphore(1)
 request_count = 0
 error_count = 0
+
+
+def array_bytes(replay):
+    return sum(array.nbytes for array in (replay.x, replay.reference, replay.eog_data) if array is not None)
 
 
 @dataclass
@@ -54,6 +61,7 @@ class Replay:
     generation: int = 0
     lock: object = field(default_factory=asyncio.Lock)
     streams: int = 0
+    auth_session: str = ''
 
     def samples_due(self):
         elapsed = self.accumulated + (time.monotonic() - self.started if self.running else 0)
@@ -199,7 +207,7 @@ async def tick(db, replay):
         started = time.perf_counter()
         try:
             async with inference_semaphore:
-                proba, latency = await asyncio.to_thread(
+                proba, latency = await run_blocking(
                     predict, replay.x[index:index+1], replay.reference, replay.personalized
                 )
             if replay.generation != generation or not replay.running:
@@ -247,7 +255,7 @@ async def tick(db, replay):
             replay.eog_processed+=1
         if windows:
             try:
-                results=await asyncio.to_thread(analyze_batch,windows,replay.eog_prefiltered)
+                results=await run_blocking(analyze_batch,windows,replay.eog_prefiltered)
                 if replay.generation!=generation or not replay.running:
                     return interrupted(db, replay)
                 for result,(trial,offset) in zip(results,offsets):
@@ -284,6 +292,8 @@ async def tick(db, replay):
 
 
 async def watchdog():
+    settings = get_settings()
+    cleaned = 0
     while True:
         await asyncio.sleep(.2)
         try:
@@ -300,6 +310,14 @@ async def watchdog():
                         stop_all(db, replay, "CLIENT_TIMEOUT")
                         alarm(db, replay, "CLIENT_TIMEOUT")
                         db.get(InferenceSession, replay.id).status = "PAUSED"
+                    if not replay.running and replay.streams == 0 and time.monotonic()-replay.last_poll > settings.idle_session_seconds:
+                        replay.generation += 1
+                        stop_all(db, replay, 'IDLE_EXPIRED')
+                        db.get(InferenceSession, replay.id).status = 'CLOSED'
+                        live.pop(replay.id, None)
+                if time.monotonic()-cleaned > 60:
+                    db.execute(delete(LoginSession).where(LoginSession.expires < time.time()))
+                    cleaned = time.monotonic()
                 db.commit()
         except Exception:
             # DB failure is fail-closed even if persistence is unavailable.
