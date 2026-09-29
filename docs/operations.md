@@ -5,7 +5,7 @@
 ## 目录与环境
 
 - `/opt/als-bci/current`：已验证代码和静态前端；模型`algorithms/bci_4class/models` 和 `algorithms/system_integration/models`；S3仅回归自测。
-- `/opt/als-bci/venv`：Python3.12，固定模型运行依赖。
+- `/opt/als-bci/venvs/security-4e68fed`：当前后端 Python3.12 锁定环境；`/opt/als-bci/venv` 保留供旧版本回滚，systemd 的 ExecStart 指明实际环境。
 - `/var/lib/als-bci/artifacts`：校准EA、上传/实验NPZ，按owner隔离。
 - `/var/lib/als-bci/demo`：最小T/E转换数据与manifest。
 - `/etc/als-bci.env`：root 600，数据库和预置账号秘密；严禁进入Git。
@@ -57,6 +57,8 @@ sudo ufw status
 安装依赖时使用umask 022，确保服务账号可读取site-packages；切换前执行`runuser -u als-bci -- /opt/als-bci/venv/bin/python -c 'import websockets.legacy.handshake'`。私有环境和备份仍保持root 600/700。健康检查失败则恢复旧release链接与旧环境并重启，不自动覆盖数据库。完整公网验收使用`verify_deployment.py`和root私有账号文件，包含四角色、来源就绪、RAG真实调用、真实EEG/EOG闭环、模拟ACK、离线保护、告警处理、急停和重置。
 
 2026-09-27已发布工作台、四来源、实时3D与智答版本，功能提交`4e6422d77fe692d36d716f5d9adc138f92acc9b3`。目录`/opt/als-bci/releases/4e6422d`，原版本`/opt/als-bci/releases/3695446`保留；升级前备份`/var/backups/als-bci/20260927T074253Z-4e6422d`。数据库及用户文件已备份，升级前后已有用户/校准/实验记录数量一致。API与公网浏览器验收通过，详见[公网验收记录](production-release-verification.md)。
+
+2026-09-29已发布安全加固版本`4e68fed`，current 指向`/opt/als-bci/releases/security-4e68fed`，备份为`/var/backups/als-bci/20260929T081356Z-security-4e68fed`。后端依赖采用独立环境，旧代码与旧环境保留，生产秘密和用户文件未覆盖。既有站点更新使用`deploy/update-security.sh STAGING_DIRECTORY COMMIT`，不重复运行首次安装脚本。业务、公网安全头、共享访客隔离、实时连接与服务器98项回归通过，详见[安全版本公网验收](security-production-verification.md)。
 
 ## 故障排查
 
