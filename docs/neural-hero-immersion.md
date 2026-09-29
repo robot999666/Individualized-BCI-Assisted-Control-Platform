@@ -39,4 +39,17 @@ Chrome 扩展未连接，经用户同意使用 Codex 内置浏览器；独立 Ch
 
 使用 `deploy/update-frontend.sh` 从当前 `/opt/als-bci/releases/security-4e68fed` 复制发布目录，仅覆盖本次前端源码和静态导出，保留原后端、数据库、模型与环境。旧哈希资源保留供已打开工作台使用。原子切换后校验并 reload Nginx，使 CSP 脚本哈希与新 HTML 同步；失败回滚路径同样重新加载原 CSP。后端服务不重启。
 
-发布前后检查后端 Python 源码校验值、MainPID、首页与静态资源、API 健康和四类账号的登录/当前用户/运行中心访问。正式发布结果在完成后追加。
+发布前后检查后端 Python 源码校验值、MainPID、首页与静态资源、API 健康和四类账号的登录/当前用户/运行中心访问。
+
+## 公网发布结果
+
+2026-09-29 09:18 UTC 发布并验收代码 `7912f0936d2d5075b7bbe7aca81e7d0197370960`，发布目录 `/opt/als-bci/releases/hero-7912f09`，回滚目录 `/opt/als-bci/releases/security-4e68fed`。
+
+- 首页 HTTP 200，单次 HTML 完整响应 218 ms；11 个首屏静态资源全部 HTTP 200，工作台与运行中心页面 HTTP 200。
+- 公网内置浏览器显示真实 3D，Bloom 启用、2480 粒子，滚动场景 morph 达到 1.000。原 CTA 成功进入工作台登录界面。
+- 公网 CSP 响应头与本次构建完全匹配，首页两个内联脚本均由哈希授权，没有放宽生产策略。
+- 管理员、研究人员、照护人员与演示访客均通过登录、当前用户、运行中心和 Secure Cookie 检查；测试新建会话已退出。
+- API 健康、MySQL 与 EOG 正常；EOG 为 REAL_MODEL，四套演示数据来源均可用。
+- 后端源码校验值仍为 `1885dc795e8e0a3193a2830a0385815b500d0ab1a714260eac72aedca60867b3`，MainPID 仍为 `792769`；业务服务未重启，Nginx/后端/MySQL 均为 active。
+
+详细结果在本机 `temp/deploy/hero-immersion-public-acceptance.json` 与 `hero-immersion-csp.json`；公网首屏及流程截图在 `output/hero-immersion/public-hero.png`、`public-flow.png`。
